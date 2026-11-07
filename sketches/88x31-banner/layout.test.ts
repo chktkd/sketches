@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorPoint, type InkMetrics, layoutText } from './layout';
+import { anchorPoint, type InkMetrics, layoutText, reanchor } from './layout';
 
 /** 内部余白のあるフォントを想定：字形は原点より 1px 右から始まり、高さ 7px（上 6 / 下 1） */
 const m: InkMetrics = { left: -1, right: 21, ascent: 6, descent: 1 };
@@ -46,12 +46,43 @@ describe('layoutText', () => {
 });
 
 describe('anchorPoint', () => {
-  it('求めた基準点で配置し直すと、当たり判定が変わらない', () => {
+  const anchors = (['left', 'center', 'right'] as const).flatMap((ax) =>
+    (['top', 'middle', 'bottom'] as const).map((ay) => [ax, ay] as const)
+  );
+  /* 横幅の拡縮で字形幅が小数になるケースを含める（20px × 66% = 13.2px） */
+  const sizes: [string, InkMetrics, number][] = [
+    ['等倍', m, 100],
+    ['縮小で小数幅', { left: 0, right: 20, ascent: 6, descent: 1 }, 66],
+    ['拡大で小数幅', { left: 0.4, right: 9.3, ascent: 5.5, descent: 1.2 }, 133],
+  ];
+
+  it.each(sizes)('%s: どの基準点に付け替えても位置が変わらない', (_, metrics, sx) => {
     for (const fx of ['none', 'shadow', 'outline'] as const) {
-      const before = layoutText({ x: 12, y: 6, sx: 100, fx }, m).bb;
-      const p = anchorPoint(before, 'center', 'middle', fx);
-      const after = layoutText({ ...p, ax: 'center', ay: 'middle', sx: 100, fx }, m).bb;
-      expect(after).toEqual(before);
+      const before = layoutText({ x: 10, y: 5, sx, fx }, metrics);
+      for (const [ax, ay] of anchors) {
+        const p = anchorPoint(before.ink, ax, ay);
+        const after = layoutText({ ...p, ax, ay, sx, fx }, metrics);
+        expect(after.bb, `${ax}/${ay}/${fx}`).toEqual(before.bb);
+      }
+    }
+  });
+
+  it('連動フレームの位置（小数部が違っても）から付け替えても、そのフレームの見た目は変わらない', () => {
+    const metrics: InkMetrics = { left: 0, right: 20, ascent: 6, descent: 1 };
+    const sx = 66;
+    const size = layoutText({ x: 0, y: 0, sx, fx: 'none' }, metrics).ink;
+    for (const x of [30, 30.5, 57.25, -12, 0.75]) {
+      for (const y of [5, 15.5, 22.25]) {
+        const frame = { x, y, ax: 'center', ay: 'middle', sx, fx: 'none' } as const;
+        const before = layoutText(frame, metrics).bb;
+        for (const [ax, ay] of anchors) {
+          const p = reanchor(frame, size, ax, ay);
+          expect(
+            layoutText({ ...frame, ...p, ax, ay }, metrics).bb,
+            `${x},${y} ${ax}/${ay}`
+          ).toEqual(before);
+        }
+      }
     }
   });
 });

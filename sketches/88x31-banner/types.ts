@@ -34,6 +34,8 @@ export interface TextLayer extends LayerBase {
   /** (x, y) が字形のどこを指すか。未指定は左上（古い保存データ） */
   ax?: TextAnchorX;
   ay?: TextAnchorY;
+  /** 直近の描画で得た字形の範囲（丸める前の実寸）。基準点の付け替えに使う。保存対象外 */
+  _ink?: BBox;
   text: string;
   font: string;
   size: number;

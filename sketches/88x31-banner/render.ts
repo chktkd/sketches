@@ -134,6 +134,7 @@ function drawText(c: CanvasRenderingContext2D, L: TextLayer) {
   if (L.crisp) threshold(x);
   c.drawImage(t, 0, 0);
   L._bb = box.bb;
+  L._ink = box.ink;
 }
 
 function drawRect(c: CanvasRenderingContext2D, L: ShapeLayer) {

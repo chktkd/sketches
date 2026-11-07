@@ -1,7 +1,7 @@
 import '../../src/base.css';
 import './style.css';
 import { encodeGIF } from './gif';
-import { anchorPoint } from './layout';
+import { reanchor } from './layout';
 import { E, PRESETS, R, T } from './presets';
 import { clearCaches, getCtx, newCanvas, render, setImageLoadHandler } from './render';
 import {
@@ -156,7 +156,7 @@ function propagate(L: Layer, dx = 0, dy = 0) {
     const src = L as unknown as Record<string, unknown>,
       dst = o as unknown as Record<string, unknown>;
     for (const k in src) {
-      if (k === 'x' || k === 'y' || k === 'visible' || k === '_bb') continue;
+      if (k === 'x' || k === 'y' || k === 'visible' || k.startsWith('_')) continue;
       const v = src[k];
       dst[k] = v !== null && typeof v === 'object' ? clone(v) : v;
     }
@@ -415,13 +415,19 @@ function buildProps() {
       );
       s.value = cur;
       s.onchange = () => {
-        if (key === 'ax') L.ax = s.value as TextAnchorX;
-        else L.ay = s.value as TextAnchorY;
-        if (L._bb) {
-          const p = anchorPoint(L._bb, L.ax ?? 'left', L.ay ?? 'top', L.fx);
-          L.x = p.x;
-          L.y = p.y;
-        }
+        const ax = key === 'ax' ? (s.value as TextAnchorX) : (L.ax ?? 'left');
+        const ay = key === 'ay' ? (s.value as TextAnchorY) : (L.ay ?? 'top');
+        const size = L._ink;
+        /* 見た目の位置を保ったまま基準点を付け替える。連動中の他フレームも、それぞれ自分の位置から
+           求め直す（移動量を一律に足すと、座標の小数部がフレームごとに違うとき 1px ずれる） */
+        const move = (o: Layer) => {
+          if (o.type !== 'text') return;
+          if (size) Object.assign(o, reanchor(o, size, ax, ay));
+          o.ax = ax;
+          o.ay = ay;
+        };
+        others(L.id, move);
+        move(L);
         ch();
         buildProps();
       };
