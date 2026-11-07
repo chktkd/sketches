@@ -4,6 +4,8 @@ export const H = 31;
 export type BgType = 'none' | 'solid' | 'hgrad' | 'vgrad' | 'stripe' | 'check' | 'scan';
 export type BorderType = 'none' | 'solid' | 'bevel' | 'inset' | 'double';
 export type TextFx = 'none' | 'shadow' | 'outline';
+export type TextAnchorX = 'left' | 'center' | 'right';
+export type TextAnchorY = 'top' | 'middle' | 'bottom';
 
 export interface BBox {
   x: number;
@@ -29,6 +31,9 @@ interface LayerBase {
 
 export interface TextLayer extends LayerBase {
   type: 'text';
+  /** (x, y) が字形のどこを指すか。未指定は左上（古い保存データ） */
+  ax?: TextAnchorX;
+  ay?: TextAnchorY;
   text: string;
   font: string;
   size: number;
