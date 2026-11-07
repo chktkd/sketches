@@ -33,3 +33,19 @@ describe('sketches/<slug>', () => {
     expect(meta.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
+
+// sketch 固有のもの（テスト・フィクスチャを含む）は sketches/<slug>/ に置く。
+// 共通の場所（tests/ と src/）から特定の sketch を名指しで import していたら、置き場所の誤り
+describe('共通ディレクトリ', () => {
+  const root = resolve(import.meta.dirname, '..');
+  const shared = ['tests', 'src'].flatMap((d) =>
+    readdirSync(resolve(root, d))
+      .filter((f) => /\.(ts|mts|js|mjs)$/.test(f))
+      .map((f) => `${d}/${f}`)
+  );
+
+  it.each(shared)('%s: 特定の sketch のファイルを import しない', (file) => {
+    const src = readFileSync(resolve(root, file), 'utf8');
+    expect(src).not.toMatch(/from\s+['"](?:\.\.\/)+sketches\/[a-z0-9-]+\//);
+  });
+});

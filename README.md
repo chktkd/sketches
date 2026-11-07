@@ -47,9 +47,9 @@ pnpm new pixel-clock "ドット時計"
 ```text
 .
 ├── index.html                # 一覧ページ
-├── src/                      # 一覧ページのコードと共有型（SketchMeta）
-├── sketches/<slug>/          # 各スケッチ（index.html + main.ts + meta.ts）
-├── tests/                    # Vitest
+├── src/                      # 一覧ページと全 sketch 共通のもの（base.css / SketchMeta）
+├── sketches/<slug>/          # 各スケッチ。固有のテストもここに置く（*.test.ts）
+├── tests/                    # 全 sketch 共通の構成チェック
 ├── scripts/new-sketch.mjs    # 雛形生成
 └── .github/workflows/        # CI / Pages デプロイ / dependency review
 ```
