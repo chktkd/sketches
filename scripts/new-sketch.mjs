@@ -37,7 +37,8 @@ const files = {
 </body>
 </html>
 `,
-  'main.ts': `import './style.css';
+  'main.ts': `import '../../src/base.css';
+import './style.css';
 
 const stage = document.getElementById('stage') as HTMLCanvasElement;
 const ctx = stage.getContext('2d')!;
@@ -59,8 +60,7 @@ export default defineSketch({
   tags: [],
 });
 `,
-  'style.css': `* { box-sizing: border-box; }
-body { margin: 0; font-family: ui-monospace, Menlo, Consolas, monospace; background: #f4f5f7; color: #1b2129; }
+  'style.css': `body { font-family: ui-monospace, Menlo, Consolas, monospace; background: #f4f5f7; color: #1b2129; }
 @media (prefers-color-scheme: dark) { body { background: #121519; color: #e3e7ec; } }
 .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px; }
 .back { color: inherit; opacity: .6; text-decoration: none; font-size: 13px; }

@@ -1,3 +1,4 @@
+import '../../src/base.css';
 import './style.css';
 import { encodeGIF } from './gif';
 import { E, PRESETS, R, T } from './presets';

@@ -1,0 +1,22 @@
+/*
+ * 全ページ共通の最小リセット。各スケッチの main.ts で自前の CSS より先に読み込む。
+ * [hidden] は display を指定したクラス（.modal { display: flex } など）に上書きされると
+ * 隠れなくなるため、!important で必ず非表示にする。
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+img {
+  max-width: 100%;
+}
+
+[hidden] {
+  display: none !important;
+}

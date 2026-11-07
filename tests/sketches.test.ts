@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SketchMeta } from '../src/meta';
@@ -17,6 +17,12 @@ describe('sketches/<slug>', () => {
     for (const f of ['index.html', 'main.ts', 'meta.ts']) {
       expect(existsSync(resolve(dir, slug, f)), `${slug}/${f}`).toBe(true);
     }
+  });
+
+  // [hidden] の非表示を保証する共通 CSS。抜けると hidden にしたモーダルなどが出たままになる
+  it.each(slugs)('%s: main.ts が共通の src/base.css を読み込む', (slug) => {
+    const main = readFileSync(resolve(dir, slug, 'main.ts'), 'utf8');
+    expect(main).toMatch(/import '\.\.\/\.\.\/src\/base\.css';/);
   });
 
   it.each(slugs)('%s: slug と meta.ts の形式が正しい', async (slug) => {
