@@ -1,0 +1,80 @@
+# Dependencies
+node_modules/
+bower_components/
+vendor/
+
+# Build outputs
+dist/
+build/
+out/
+target/
+*.min.js
+*.min.css
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Gemfile.lock
+Cargo.lock
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# Cache
+.cache/
+.eslintcache
+.stylelintcache
+
+# Environment
+.env
+.env.local
+.env*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.tox/
+*.egg-info/
+
+# Git
+.git/
+.gitignore
+
+# Editor
+.idea/
+.vscode/*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation build
+docs/_build/
+site/
+_site/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Temporary
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Other
+CHANGELOG.md
+LICENSE
+
+# Markdown
+*.md
+*.mdx
+*.markdown
+*.mdown

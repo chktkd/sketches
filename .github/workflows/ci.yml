@@ -1,0 +1,54 @@
+name: CI
+
+run-name: 'CI / ${{ github.ref_name }} by @${{ github.actor }}'
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# 他の repo は common-github-actions の node-ci.yml を呼ぶが、この repo は public のため
+# private repo の reusable workflow を参照できない。同じ手順（lint / format:check /
+# typecheck / test / build）とアクションのピン留めをここに直接書く。
+jobs:
+  quality:
+    name: Node.js quality checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          cache: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run lint
+        run: pnpm run lint
+
+      - name: Run format check
+        run: pnpm run format:check
+
+      - name: Run type check
+        run: pnpm run typecheck
+
+      - name: Run tests
+        run: pnpm run test
+
+      - name: Run build
+        run: pnpm run build

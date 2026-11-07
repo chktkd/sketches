@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>88x31 バナー工房 · sketches</title>
+  <meta name="description" content="レイヤーとフレームで 88×31 の相互リンク用バナーを作り、PNG／アニメ GIF で書き出す">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=Press+Start+2P&family=DotGothic16&family=Pixelify+Sans:wght@400;700&family=VT323&family=M+PLUS+1+Code:wght@500&display=swap">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><a class="back" href="../../" aria-label="sketches 一覧へ戻る">sketches /</a> 88x31 BANNER</h1>
+    <span class="sub">キャンバス上でドラッグして配置。画像はドラッグ＆ドロップや貼り付けでも取り込めます</span>
+  </header>
+
+  <section class="card" aria-label="キャンバス">
+    <div class="toolbar">
+      <button class="btn sm" id="addText" type="button">＋ テキスト</button>
+      <button class="btn sm" id="addImg" type="button">＋ 画像</button>
+      <button class="btn sm" id="addRect" type="button">＋ 四角</button>
+      <button class="btn sm" id="addEll" type="button">＋ 円</button>
+      <input type="file" id="file" accept="image/*" hidden>
+      <span class="sep"></span>
+      <button class="btn ghost sm" id="undo" type="button" title="元に戻す (Ctrl+Z)">↶ 戻す</button>
+      <button class="btn ghost sm" id="redo" type="button" title="やり直す (Ctrl+Shift+Z)">↷ やり直す</button>
+      <span class="spacer"></span>
+      <label class="check"><input type="checkbox" id="showGrid" checked> ドット格子</label>
+    </div>
+    <div class="well" id="well">
+      <div class="cbox" id="cbox">
+        <canvas id="big" width="88" height="31"></canvas>
+        <div id="grid"></div>
+        <div id="sel" hidden><div id="handle" title="ドラッグでサイズ変更"></div></div>
+      </div>
+    </div>
+    <p class="sub" style="margin:0">クリックで選択、ドラッグで移動、右下の■でサイズ変更。矢印キーで1px（Shift で5px）、Delete で削除、Ctrl+Z で元に戻せます。</p>
+
+    <div style="display:grid;gap:8px">
+      <div class="toolbar">
+        <h2 style="margin-right:6px">Frames</h2>
+        <button class="btn sm" id="play" type="button">▶ 再生</button>
+        <button class="btn ghost sm" id="fDup" type="button">＋ 複製</button>
+        <button class="btn ghost sm" id="fNew" type="button">＋ 空のフレーム</button>
+        <button class="btn ghost sm" id="fLeft" type="button" aria-label="フレームを左へ">◀</button>
+        <button class="btn ghost sm" id="fRight" type="button" aria-label="フレームを右へ">▶</button>
+        <button class="btn danger sm" id="fDel" type="button">削除</button>
+      </div>
+      <div class="frames" id="frames"></div>
+      <div class="inline">
+        <label class="sub" for="delay">このフレームの表示時間</label>
+        <input type="number" id="delay" min="20" max="10000" step="10"> <span class="sub">ms</span>
+        <button class="btn ghost sm" id="delayAll" type="button">全フレームに適用</button>
+      </div>
+      <label class="check"><input type="checkbox" id="link"> <span>全フレーム連動：レイヤーの追加・削除・編集を他のフレームの同じレイヤーにも反映（位置は移動量だけ反映、表示/非表示はフレームごと）</span></label>
+      <div class="inline">
+        <span class="sub">選択中のレイヤーで自動生成：</span>
+        <button class="btn ghost sm" id="mkBlink" type="button">点滅</button>
+        <select id="scDir" aria-label="スクロール方向"><option value="left">← 左へ流す</option><option value="right">→ 右へ流す</option><option value="up">↑ 上へ流す</option><option value="down">↓ 下へ流す</option></select>
+        <select id="scStep" aria-label="1フレームの移動量"><option value="1">1px/コマ</option><option value="2" selected>2px/コマ</option><option value="3">3px/コマ</option><option value="4">4px/コマ</option></select>
+        <button class="btn ghost sm" id="mkScroll" type="button">スクロール</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Layers</legend>
+      <ul id="layers"></ul>
+      <div class="toolbar">
+        <button class="btn ghost sm" id="addText2" type="button">＋ テキスト</button>
+        <button class="btn ghost sm" id="addImg2" type="button">＋ 画像</button>
+        <button class="btn ghost sm" id="addRect2" type="button">＋ 四角</button>
+        <button class="btn ghost sm" id="addEll2" type="button">＋ 円</button>
+        <button class="btn danger sm" id="clearL" type="button">全部消す</button>
+      </div>
+      <div class="sub">上にあるものほど手前に表示されます</div>
+    </fieldset>
+    <fieldset id="props"><legend>Selected</legend></fieldset>
+    <fieldset>
+      <legend>Background / Frame</legend>
+      <div class="row"><label for="bgType">背景</label>
+        <select id="bgType">
+          <option value="none">透明</option><option value="solid">単色</option><option value="hgrad">横グラデ</option><option value="vgrad">縦グラデ</option>
+          <option value="stripe">ストライプ</option><option value="check">市松</option><option value="scan">走査線</option>
+        </select></div>
+      <div class="row"><label for="bg1">背景色</label><div class="inline"><input type="color" id="bg1" aria-label="背景色1"><input type="color" id="bg2" aria-label="背景色2"></div></div>
+      <div class="row"><label for="border">枠</label>
+        <select id="border">
+          <option value="none">なし</option><option value="solid">1px 線</option><option value="bevel">立体（凸）</option>
+          <option value="inset">立体（凹）</option><option value="double">二重線</option>
+        </select></div>
+      <div class="row"><label for="bcol">枠の色</label><input type="color" id="bcol"></div>
+      <div class="sub">背景と枠は全フレーム共通です</div>
+    </fieldset>
+  </div>
+
+  <section class="card" aria-label="書き出し">
+    <h2>Export</h2>
+    <div class="toolbar">
+      <button class="btn" id="dlPng" type="button">PNG を保存</button>
+      <button class="btn" id="mkGif" type="button">GIF を書き出して保存</button>
+      <button class="btn ghost" id="copyHtml" type="button">貼り付け用 HTML をコピー</button>
+            <span class="toast" id="toast" role="status"></span>
+    </div>
+    <div class="export">
+      <figure><img id="out1" class="x1" alt="現在のフレーム（原寸PNG）"><figcaption>PNG 原寸（表示中のフレーム）</figcaption></figure>
+      <figure><img id="out2" class="x2" alt=""><figcaption>PNG 2倍表示</figcaption></figure>
+      <figure id="gifFig" hidden><img id="gifOut" class="x1" alt="書き出したアニメGIF"><figcaption id="gifCap">GIF</figcaption></figure>
+      <figure id="gifFig2" hidden><img id="gifOut2" class="x2" alt=""><figcaption>GIF 2倍表示</figcaption></figure>
+    </div>
+    <p class="sub" style="margin:0">ボタンでファイルとして保存できます。原寸画像の長押し／右クリックからも保存できます。</p>
+    <div>
+      <div class="sub" style="margin-bottom:6px">プリセット（読み込むと今の内容は置き換わります。戻すで復元できます）</div>
+      <div class="presets" id="presets"></div>
+    </div>
+  </section>
+</div>
+
+<div class="modal" id="cropM" hidden>
+  <div class="mpanel" role="dialog" aria-modal="true" aria-labelledby="cropTitle">
+    <h2 id="cropTitle">画像をトリミング</h2>
+    <div class="cstage"><div class="cimg" id="cimg"><img id="cropImg" alt="トリミング対象の画像" draggable="false">
+      <div id="cbx"><span class="h" data-c="nw"></span><span class="h" data-c="ne"></span><span class="h" data-c="sw"></span><span class="h" data-c="se"></span></div></div></div>
+    <div class="inline">
+      <label class="sub" for="cratio">比率</label>
+      <select id="cratio"><option value="free">自由</option><option value="place">今の配置サイズ</option><option value="1">1:1（正方形）</option><option value="2.8387">88:31（全面）</option><option value="0.9">左アイコン枠</option></select>
+      <button class="btn ghost sm" id="cReset" type="button">全体に戻す</button>
+      <span class="spacer"></span>
+      <button class="btn ghost" id="cCancel" type="button">キャンセル</button>
+      <button class="btn" id="cApply" type="button">適用</button>
+    </div>
+    <p class="sub" style="margin:0">枠をドラッグで移動、四隅でサイズ変更。切り抜いた範囲だけが、配置サイズのドット数に縮小されます。</p>
+  </div>
+</div>
+
+<script type="module" src="./main.ts"></script>
+</body>
+</html>
