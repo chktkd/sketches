@@ -8,8 +8,7 @@
 @media (prefers-color-scheme: dark) {
   :root { --bg: #121519; --fg: #e3e7ec; --muted: #8f9aa7; --line: #2c333c; --accent: #82b2ff; color-scheme: dark; }
 }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--ui); font-size: 15px; line-height: 1.6; }
+body { background: var(--bg); color: var(--fg); font-family: var(--ui); font-size: 15px; line-height: 1.6; }
 .wrap { max-width: 760px; margin: 0 auto; padding: 48px max(20px, env(safe-area-inset-left)) 64px max(20px, env(safe-area-inset-right)); }
 h1 { font-family: var(--disp); font-weight: 400; font-size: clamp(32px, 7vw, 48px); margin: 0; letter-spacing: .02em; }
 .lead { color: var(--muted); margin: 8px 0 36px; }

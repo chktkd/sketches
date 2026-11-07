@@ -1,3 +1,4 @@
+import './base.css';
 import './home.css';
 import type { SketchMeta } from './meta';
 
