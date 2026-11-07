@@ -1,8 +1,8 @@
 let seq = 1;
 export const nid = (): string => 'L' + Date.now().toString(36) + seq++;
 
-/** _bb（描画キャッシュ）を落としたディープコピー */
-export const stripBB = (k: string, v: unknown) => (k === '_bb' ? undefined : v);
+/** _ で始まるキー（_bb / _ink などの描画キャッシュ）を保存・複製の対象から外す */
+export const stripBB = (k: string, v: unknown) => (k.startsWith('_') ? undefined : v);
 export const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o, stripBB));
 
 export const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));

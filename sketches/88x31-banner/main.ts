@@ -1,9 +1,20 @@
 import '../../src/base.css';
 import './style.css';
 import { encodeGIF } from './gif';
+import { reanchor } from './layout';
 import { E, PRESETS, R, T } from './presets';
 import { clearCaches, getCtx, newCanvas, render, setImageLoadHandler } from './render';
-import { H, W, type Crop, type Doc, type ImageLayer, type Layer } from './types';
+import {
+  type BBox,
+  type Crop,
+  type Doc,
+  H,
+  type ImageLayer,
+  type Layer,
+  type TextAnchorX,
+  type TextAnchorY,
+  W,
+} from './types';
 import { byId, clamp, clone, el, nid, stripBB } from './util';
 
 const STORAGE_KEY = 'sketch:88x31-banner:v3';
@@ -145,7 +156,7 @@ function propagate(L: Layer, dx = 0, dy = 0) {
     const src = L as unknown as Record<string, unknown>,
       dst = o as unknown as Record<string, unknown>;
     for (const k in src) {
-      if (k === 'x' || k === 'y' || k === 'visible' || k === '_bb') continue;
+      if (k === 'x' || k === 'y' || k === 'visible' || k.startsWith('_')) continue;
       const v = src[k];
       dst[k] = v !== null && typeof v === 'object' ? clone(v) : v;
     }
@@ -299,10 +310,13 @@ function buildProps() {
       min: String(min),
       max: String(max),
       value: String(rec[key]),
+      step: key === 'x' || key === 'y' ? '0.5' : '1',
     });
     i.oninput = () => {
-      const v = parseInt(i.value, 10);
-      if (Number.isNaN(v)) return;
+      const raw = Number(i.value);
+      if (!i.value || Number.isNaN(raw)) return;
+      // 中央基準の座標は 0.5 刻みになりうる。それ以外は整数
+      const v = key === 'x' || key === 'y' ? Math.round(raw * 2) / 2 : Math.round(raw);
       const old = rec[key] as number;
       rec[key] = v;
       after?.();
@@ -392,6 +406,57 @@ function buildProps() {
       )
     );
     P.append(chk('crisp', 'アンチエイリアスを切る（ドット感）'));
+    /* 基準点を変えても見た目の位置は動かさず、x / y の意味だけを変える */
+    const anchorSel = (key: 'ax' | 'ay', opts: [string, string][], cur: string) => {
+      const s = el(
+        'select',
+        { id: `p_${key}` },
+        ...opts.map(([v, t]) => el('option', { value: v, textContent: t }))
+      );
+      s.value = cur;
+      s.onchange = () => {
+        const ax = key === 'ax' ? (s.value as TextAnchorX) : (L.ax ?? 'left');
+        const ay = key === 'ay' ? (s.value as TextAnchorY) : (L.ay ?? 'top');
+        const size = L._ink;
+        /* 見た目の位置を保ったまま基準点を付け替える。連動中の他フレームも、それぞれ自分の位置から
+           求め直す（移動量を一律に足すと、座標の小数部がフレームごとに違うとき 1px ずれる） */
+        const move = (o: Layer) => {
+          if (o.type !== 'text') return;
+          if (size) Object.assign(o, reanchor(o, size, ax, ay));
+          o.ax = ax;
+          o.ay = ay;
+        };
+        others(L.id, move);
+        move(L);
+        ch();
+        buildProps();
+      };
+      return s;
+    };
+    row(
+      '基準点',
+      inl(
+        anchorSel(
+          'ax',
+          [
+            ['left', '左'],
+            ['center', '中央'],
+            ['right', '右'],
+          ],
+          L.ax ?? 'left'
+        ),
+        anchorSel(
+          'ay',
+          [
+            ['top', '上'],
+            ['middle', '中央'],
+            ['bottom', '下'],
+          ],
+          L.ay ?? 'top'
+        )
+      ),
+      'p_ax'
+    );
   } else if (L.type === 'rect' || L.type === 'ellipse') {
     row('大きさ', inl(numIn('w', 1, W * 2), '×', numIn('h', 1, H * 2)), 'p_w');
     row('塗り', inl(chk('fillOn', '塗る'), col('fill', '塗り色')));
@@ -454,12 +519,12 @@ function buildProps() {
     );
   }
   row('位置 x / y', inl(numIn('x', -W * 2, W * 2), numIn('y', -H * 2, H * 2)), 'p_x');
-  const align = (fn: (b: { w: number; h: number }) => void) => () => {
-    const b = L._bb ?? { w: 1, h: 1 },
-      ox = L.x,
-      oy = L.y;
-    fn(b);
-    ch(L.x - ox, L.y - oy);
+  /* 当たり判定（見た目の範囲）を基準に動かすので、文字の基準点の種類によらず中央にそろう */
+  const align = (fn: (b: BBox) => { dx: number; dy: number }) => () => {
+    const { dx, dy } = fn(L._bb ?? { x: L.x, y: L.y, w: 1, h: 1 });
+    L.x += dx;
+    L.y += dy;
+    ch(dx, dy);
     buildProps();
   };
   row(
@@ -467,15 +532,11 @@ function buildProps() {
     inl(
       btn(
         '左右中央',
-        align((b) => {
-          L.x = Math.round((W - b.w) / 2);
-        })
+        align((b) => ({ dx: Math.round((W - b.w) / 2) - b.x, dy: 0 }))
       ),
       btn(
         '上下中央',
-        align((b) => {
-          L.y = Math.round((H - b.h) / 2);
-        })
+        align((b) => ({ dx: 0, dy: Math.round((H - b.h) / 2) - b.y }))
       )
     )
   );
@@ -613,9 +674,7 @@ document.addEventListener('keydown', (e) => {
 
 /* ---------- adding & import ---------- */
 const newText = () =>
-  addLayer(
-    T({ x: 30, y: 11, text: 'TEXT', color: doc.bg.type === 'none' ? '#000000' : '#ffffff' })
-  );
+  addLayer(T({ text: 'TEXT', color: doc.bg.type === 'none' ? '#000000' : '#ffffff' }));
 const newRect = () => addLayer(R({ x: 34, y: 6, w: 20, h: 19, fill: '#ffffff' }));
 const newEll = () =>
   addLayer(E({ x: 34, y: 5, w: 21, h: 21, fill: '#ffd400', strokeOn: true, stroke: '#000000' }));
@@ -952,8 +1011,11 @@ button('mkScroll').onclick = () => {
   }
   const dir = select_('scDir').value,
     st = +select_('scStep').value,
-    b = L._bb ?? { w: 10, h: 10 },
+    b = L._bb ?? { x: L.x, y: L.y, w: 10, h: 10 },
     tpl = doc.frames[fi];
+  // from / to は見た目の範囲（当たり判定）の左上で計算し、レイヤーの基準点との差を足して座標にする
+  const offX = L.x - b.x,
+    offY = L.y - b.y;
   const horiz = dir === 'left' || dir === 'right';
   const from = dir === 'left' ? W : dir === 'right' ? -b.w : dir === 'up' ? H : -b.h;
   const to = dir === 'left' ? -b.w : dir === 'right' ? W : dir === 'up' ? -b.h : H;
@@ -964,8 +1026,8 @@ button('mkScroll').onclick = () => {
     const o = f.layers.find((l) => l.id === L.id);
     const v = from + Math.sign(to - from) * st * k;
     if (o) {
-      if (horiz) o.x = v;
-      else o.y = v;
+      if (horiz) o.x = v + offX;
+      else o.y = v + offY;
     }
     return f;
   });

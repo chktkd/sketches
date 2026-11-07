@@ -1,3 +1,4 @@
+import { layoutText } from './layout';
 import { H, W, type Doc, type ImageLayer, type ShapeLayer, type TextLayer } from './types';
 
 const ctx2d = (cv: HTMLCanvasElement) => cv.getContext('2d', { willReadFrequently: true })!;
@@ -97,13 +98,21 @@ function drawText(c: CanvasRenderingContext2D, L: TextLayer) {
     x = ctx2d(t);
   const font = `${L.size}px "${L.font}"`;
   x.font = font;
-  const mw = (x.measureText(L.text).width * L.sx) / 100;
+  x.textBaseline = 'alphabetic';
+  const tm = x.measureText(L.text);
+  // 字形の実寸で配置する。フォントの内部余白や端末ごとのフォント差で位置がずれないようにする
+  const box = layoutText(L, {
+    left: tm.actualBoundingBoxLeft,
+    right: tm.actualBoundingBoxRight,
+    ascent: tm.actualBoundingBoxAscent,
+    descent: tm.actualBoundingBoxDescent,
+  });
   const put = (dx: number, dy: number, col: string) => {
     x.save();
     x.fillStyle = col;
     x.font = font;
-    x.textBaseline = 'top';
-    x.translate(L.x + dx, L.y + dy);
+    x.textBaseline = 'alphabetic';
+    x.translate(box.originX + dx, box.originY + dy);
     x.scale(L.sx / 100, 1);
     x.fillText(L.text, 0, 0);
     x.restore();
@@ -124,7 +133,8 @@ function drawText(c: CanvasRenderingContext2D, L: TextLayer) {
   put(0, 0, L.color);
   if (L.crisp) threshold(x);
   c.drawImage(t, 0, 0);
-  L._bb = { x: L.x, y: L.y, w: Math.max(2, Math.ceil(mw)), h: L.size };
+  L._bb = box.bb;
+  L._ink = box.ink;
 }
 
 function drawRect(c: CanvasRenderingContext2D, L: ShapeLayer) {
