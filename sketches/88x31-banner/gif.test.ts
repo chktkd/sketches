@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { encodeGIF } from '../sketches/88x31-banner/gif';
+import { encodeGIF } from './gif';
 import { decodeGIF } from './gif-decode';
 
 const W = 88;
