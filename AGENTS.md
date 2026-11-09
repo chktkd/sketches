@@ -29,6 +29,7 @@
 ## Project-Specific Notes
 
 - public repo のため、private の `common-github-actions` の reusable workflow を参照できない。CI は `node-ci.yml` と同じ手順・同じピン留めを `ci.yml` に直接書いている。`node-ci.yml` を更新したら、こちらも合わせる
+- `renovate.json` は private の preset（`chktkd/renovate-settings` の `default.json` と `automerge.json`）の内容を直接書いている。`extends` で参照すると "Cannot find preset's package" で Renovate が止まったため（sketches#1）。preset を変えたら、こちらも合わせる。
 - 公開先は handbook の Deployment Standards（公開サイトは Vercel / Cloudflare Pages）と異なり、GitHub Pages を選んでいる。ビルド成果物が静的ファイルだけで、リポジトリと公開先を1か所で完結させるため
 - GIF エンコーダは `sketches/88x31-banner/gif.ts` に自前実装している。同じディレクトリの `gif.test.ts` が、テスト用デコーダ（`gif-decode.ts`）でのラウンドトリップを検証する
 - 現状は単一パッケージ（devDependencies をルートで共有）。sketch ごとに依存のバージョンやビルドツールを変えたくなったら、pnpm workspace と CI の matrix に移す

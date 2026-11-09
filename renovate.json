@@ -1,4 +1,33 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>chktkd/renovate-settings", "github>chktkd/renovate-settings:automerge"]
+  "extends": ["config:recommended", "group:allNonMajor"],
+  "schedule": ["* 0-5 * * 1"],
+  "timezone": "Asia/Tokyo",
+  "updateNotScheduled": false,
+  "minimumReleaseAge": "3 days",
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 1,
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Require Dashboard approval for major updates",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Automerge minor and patch updates after CI passes",
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "description": "Batch development dependency minor/patch updates into a single PR",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "devDependencies (non-major)"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "automerge": false
+  }
 }
