@@ -1,9 +1,16 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CELL, GRID_N, HALF } from './config';
 import { type PropSpec, isInRoadIntersection } from './layout';
 import { createRng } from './rng';
+import {
+  cableGeometry,
+  leafTexture,
+  signalGeometries,
+  treeGeometries,
+  utilityPoleGeometry,
+} from './propGeo';
 import { swayify } from './wind';
 
 function paint(g: THREE.BufferGeometry, r: number, gr: number, b: number): THREE.BufferGeometry {
@@ -130,59 +137,6 @@ function carGeometries(): { body: THREE.BufferGeometry; dark: THREE.BufferGeomet
   return { body, dark: darkGeo };
 }
 
-function treeGeometry(rng: ReturnType<typeof createRng>): THREE.BufferGeometry {
-  const parts: THREE.BufferGeometry[] = [];
-  const trunk = new THREE.CylinderGeometry(0.2, 0.34, 3.4, 8);
-  trunk.translate(0, 1.7, 0);
-  parts.push(paint(trunk, 0.24, 0.17, 0.11));
-  const blobs: [number, number, number, number, number][] = [
-    [0, 4.6, 0, 2.2, 0],
-    [1.1, 3.9, 0.5, 1.6, 1],
-    [-1.0, 4.1, -0.6, 1.7, 2],
-    [0.2, 5.8, -0.2, 1.5, 3],
-  ];
-  for (const [x, y, z, r, k] of blobs) {
-    let ico: THREE.BufferGeometry = new THREE.IcosahedronGeometry(r, 2);
-    ico.deleteAttribute('uv');
-    ico.deleteAttribute('normal');
-    ico = mergeVertices(ico, 1e-3);
-    const pos = ico.getAttribute('position');
-    for (let i = 0; i < pos.count; i++) {
-      const px = pos.getX(i);
-      const py = pos.getY(i);
-      const pz = pos.getZ(i);
-      const len = Math.hypot(px, py, pz);
-      const n =
-        0.82 +
-        0.3 *
-          Math.abs(
-            Math.sin(px * 2.3 + k) * Math.cos(pz * 2.1 - k) + Math.sin(py * 3.1 + k * 2) * 0.5
-          );
-      pos.setXYZ(i, (px / len) * r * n, (py / len) * r * n * 0.82, (pz / len) * r * n);
-    }
-    ico.computeVertexNormals();
-    ico.translate(x, y, z);
-    const shade = 0.82 + rng.next() * 0.3;
-    // 頂点ごとに明るさをずらして、葉の塊に陰影の変化を出す
-    const g = ico.toNonIndexed();
-    const n = g.getAttribute('position').count;
-    const col = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const py = g.getAttribute('position').getY(i);
-      const t = THREE.MathUtils.clamp((py - (y - r)) / (r * 2), 0, 1);
-      const f = shade * (0.65 + 0.55 * t);
-      col[i * 3] = 0.15 * f;
-      col[i * 3 + 1] = 0.3 * f;
-      col[i * 3 + 2] = 0.09 * f;
-    }
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    parts.push(g);
-  }
-  const g = mergeGeometries(parts, false);
-  g.computeBoundingSphere();
-  return g;
-}
-
 function lampPoleGeometry(): THREE.BufferGeometry {
   const pole = new THREE.CylinderGeometry(0.08, 0.15, 8, 8);
   pole.translate(0, 4, 0);
@@ -192,7 +146,7 @@ function lampPoleGeometry(): THREE.BufferGeometry {
   return g;
 }
 
-type Kind = 'car' | 'tree' | 'lamp';
+type Kind = 'car' | 'tree' | 'lamp' | 'pole' | 'signal';
 
 export interface PropItem {
   kind: Kind;
@@ -214,6 +168,17 @@ export interface PropItem {
 
 const CAR_COLORS = [0xd9d9d6, 0x1c1f24, 0xa3201c, 0x2a4a7c, 0x888d92, 0xe6c24d, 0x3b5a3a, 0xf2f2f0];
 
+const RADIUS: Record<Kind, number> = { car: 2.4, tree: 1.4, lamp: 0.6, pole: 0.5, signal: 0.6 };
+const HEIGHT: Record<Kind, number> = { car: 1.8, tree: 7.5, lamp: 8, pole: 10.4, signal: 6.2 };
+
+/** 電線 1 区間（2 本の電柱の間） */
+interface Span {
+  a: PropItem;
+  b: PropItem;
+  idx: number;
+  hidden: boolean;
+}
+
 export class Props {
   readonly group = new THREE.Group();
   readonly items: PropItem[] = [];
@@ -223,9 +188,18 @@ export class Props {
     emissiveIntensity: 0,
     roughness: 0.5,
   });
-  private readonly meshes: Record<Kind, THREE.InstancedMesh>;
-  private readonly lampHeads: THREE.InstancedMesh;
-  private readonly carDark: THREE.InstancedMesh;
+  /** 信号のレンズ（自発光）。時間帯で明るさを変える */
+  readonly lensMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  /** 種類ごとのインスタンスメッシュ。同じ行列を共有する複数パーツ（車体とガラスなど）を持てる */
+  private readonly parts: Record<Kind, THREE.InstancedMesh[]> = {
+    car: [],
+    tree: [],
+    lamp: [],
+    pole: [],
+    signal: [],
+  };
+  private cables!: THREE.InstancedMesh;
+  private spans: Span[] = [];
   private readonly m = new THREE.Matrix4();
   private readonly q = new THREE.Quaternion();
   private readonly q2 = new THREE.Quaternion();
@@ -234,9 +208,9 @@ export class Props {
   private readonly axis = new THREE.Vector3();
   private readonly animating = new Set<PropItem>();
 
-  constructor(specs: PropSpec[]) {
+  constructor(specs: PropSpec[], leafCards = 480) {
     const rng = createRng(4242);
-    const counts: Record<Kind, number> = { car: 0, tree: 0, lamp: 0 };
+    const counts: Record<Kind, number> = { car: 0, tree: 0, lamp: 0, pole: 0, signal: 0 };
     for (const sp of specs) {
       if (sp.x < 0.5 || sp.z < 0.5 || sp.x > GRID_N - 0.5 || sp.z > GRID_N - 0.5) continue;
       if (sp.type === 'car' && isInRoadIntersection(sp.x, sp.z)) continue;
@@ -246,9 +220,12 @@ export class Props {
         kind,
         x: sp.x * CELL - HALF,
         z: sp.z * CELL - HALF,
-        r: kind === 'car' ? 2.4 : kind === 'tree' ? 1.4 : 0.6,
-        h: kind === 'car' ? 1.8 : kind === 'tree' ? 7.5 : 8,
-        yaw: sp.rot + (kind === 'car' ? (sp.v - 0.5) * 0.06 : sp.v * Math.PI * 2),
+        r: RADIUS[kind],
+        h: HEIGHT[kind],
+        yaw:
+          kind === 'pole' || kind === 'signal'
+            ? sp.rot
+            : sp.rot + (kind === 'car' ? (sp.v - 0.5) * 0.06 : sp.v * Math.PI * 2),
         state: 0,
         t: 0,
         dirX: 0,
@@ -258,76 +235,169 @@ export class Props {
       });
     }
 
-    const carMat = new THREE.MeshPhysicalMaterial({
-      color: 0xffffff,
-      roughness: 0.38,
-      metalness: 0.55,
-      clearcoat: 1,
-      clearcoatRoughness: 0.16,
-    });
-    const carDarkMat = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.28,
-      metalness: 0.35,
-    });
-    const car = carGeometries();
-    const treeMat = swayify(
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 }),
-      0.06
-    );
-    const poleMat = new THREE.MeshStandardMaterial({
-      color: 0x3b4046,
-      roughness: 0.55,
-      metalness: 0.7,
-    });
-    const mk = (geo: THREE.BufferGeometry, mat: THREE.Material, n: number) => {
-      const mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, n));
-      mesh.castShadow = true;
+    const mk = (kind: Kind, geo: THREE.BufferGeometry, mat: THREE.Material, castShadow = true) => {
+      const mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, counts[kind]));
+      mesh.count = counts[kind];
+      mesh.castShadow = castShadow;
       mesh.receiveShadow = true;
       mesh.frustumCulled = false;
       this.group.add(mesh);
+      this.parts[kind].push(mesh);
       return mesh;
     };
-    this.meshes = {
-      car: mk(car.body, carMat, counts.car),
-      tree: mk(treeGeometry(rng), treeMat, counts.tree),
-      lamp: mk(lampPoleGeometry(), poleMat, counts.lamp),
+    const metal = (color: number, roughness = 0.55, metalness = 0.7) =>
+      new THREE.MeshStandardMaterial({ color, roughness, metalness });
+
+    // ── 車
+    const car = carGeometries();
+    const carBody = mk(
+      'car',
+      car.body,
+      new THREE.MeshPhysicalMaterial({
+        color: 0xffffff,
+        roughness: 0.38,
+        metalness: 0.55,
+        clearcoat: 1,
+        clearcoatRoughness: 0.16,
+      })
+    );
+    mk(
+      'car',
+      car.dark,
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.28, metalness: 0.35 })
+    );
+
+    // ── 木: 幹と、葉カードの樹冠
+    const tg = treeGeometries(rng, leafCards);
+    mk(
+      'tree',
+      tg.trunk,
+      swayify(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }), 0.04)
+    );
+    const leafMat = new THREE.MeshStandardMaterial({
+      map: leafTexture(),
+      vertexColors: true,
+      alphaTest: 0.5,
+      alphaToCoverage: true,
+      side: THREE.DoubleSide,
+      roughness: 0.78,
+      metalness: 0,
+    });
+    // 葉は薄く光を透かすので、裏面でも法線を反転させない（外向きの陰影のまま）
+    leafMat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <normal_fragment_begin>',
+        THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;', '')
+      );
     };
+    const leaves = mk('tree', tg.leaves, swayify(leafMat, 0.09));
+
+    // ── 街灯
+    mk('lamp', lampPoleGeometry(), metal(0x3b4046));
     const head = new THREE.BoxGeometry(0.9, 0.16, 0.45);
     head.translate(1.6, 7.82, 0);
-    this.lampHeads = new THREE.InstancedMesh(head, this.lampHeadMaterial, Math.max(1, counts.lamp));
-    this.lampHeads.frustumCulled = false;
-    this.group.add(this.lampHeads);
-    this.carDark = mk(car.dark, carDarkMat, counts.car);
-    for (const k of ['car', 'tree', 'lamp'] as const) this.meshes[k].count = counts[k];
-    this.carDark.count = counts.car;
-    this.lampHeads.count = counts.lamp;
+    mk('lamp', head, this.lampHeadMaterial, false);
+
+    // ── 電柱と電線
+    mk(
+      'pole',
+      utilityPoleGeometry(),
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.15 })
+    );
+    this.buildCables();
+
+    // ── 信号機
+    const sg = signalGeometries();
+    mk(
+      'signal',
+      sg.body,
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.5 })
+    );
+    const lens = mk('signal', sg.lens, this.lensMaterial, false);
 
     const col = new THREE.Color();
     for (const it of this.items) {
       this.compose(it);
       if (it.kind === 'car') {
         col.setHex(CAR_COLORS[Math.floor(it.v * 997) % CAR_COLORS.length] as number);
-        this.meshes.car.setColorAt(it.idx, col);
+        carBody.setColorAt(it.idx, col);
       } else if (it.kind === 'tree') {
-        const f = 0.78 + ((it.v * 31) % 1) * 0.5;
-        this.meshes.tree.setColorAt(
+        const f = 0.82 + ((it.v * 31) % 1) * 0.4;
+        // 少し黄緑寄り・青緑寄りに振って、木ごとの個体差を出す
+        const warm = (it.v * 7) % 1;
+        leaves.setColorAt(
           it.idx,
-          col.setRGB(f, f * (0.95 + ((it.v * 7) % 1) * 0.15), f * 0.9)
+          col.setRGB(f * (0.92 + warm * 0.3), f, f * (0.85 + (1 - warm) * 0.2))
+        );
+      } else if (it.kind === 'signal') {
+        // 赤（>1 の HDR）か青信号
+        lens.setColorAt(
+          it.idx,
+          it.v < 0.45 ? col.setRGB(3.2, 0.12, 0.08) : col.setRGB(0.1, 2.6, 1.2)
         );
       }
     }
-    for (const k of ['car', 'tree'] as const) {
-      this.meshes[k].instanceColor!.needsUpdate = true;
+    carBody.instanceColor!.needsUpdate = true;
+    leaves.instanceColor!.needsUpdate = true;
+    lens.instanceColor!.needsUpdate = true;
+    for (const list of Object.values(this.parts))
+      for (const mesh of list) mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /** 同じ線路上の隣り合う電柱を、垂れ下がる電線でつなぐ */
+  private buildCables() {
+    const poles = this.items.filter((i) => i.kind === 'pole');
+    // 線路: yaw が 0（X 方向）なら z が、π/2（Z 方向）なら x が同じ柱同士
+    const lines = new Map<string, PropItem[]>();
+    for (const p of poles) {
+      const alongX = Math.abs(Math.sin(p.yaw)) < 0.5;
+      const key = alongX ? `x:${Math.round(p.z * 4)}` : `z:${Math.round(p.x * 4)}`;
+      const arr = lines.get(key) ?? [];
+      arr.push(p);
+      lines.set(key, arr);
     }
-    for (const k of ['car', 'tree', 'lamp'] as const)
-      this.meshes[k].instanceMatrix.needsUpdate = true;
-    this.lampHeads.instanceMatrix.needsUpdate = true;
-    this.carDark.instanceMatrix.needsUpdate = true;
+    const SPAN = 30;
+    for (const [key, arr] of lines) {
+      const alongX = key.startsWith('x:');
+      arr.sort((a, b) => (alongX ? a.x - b.x : a.z - b.z));
+      for (let i = 0; i + 1 < arr.length; i++) {
+        const a = arr[i]!;
+        const b = arr[i + 1]!;
+        const len = Math.hypot(b.x - a.x, b.z - a.z);
+        if (len > 62) continue;
+        this.spans.push({ a, b, idx: this.spans.length, hidden: false });
+      }
+    }
+    this.cables = new THREE.InstancedMesh(
+      cableGeometry(SPAN),
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.3 }),
+      Math.max(1, this.spans.length)
+    );
+    this.cables.count = this.spans.length;
+    this.cables.castShadow = true;
+    this.cables.frustumCulled = false;
+    this.group.add(this.cables);
+    for (const s of this.spans) this.placeSpan(s);
+    this.cables.instanceMatrix.needsUpdate = true;
+  }
+
+  private placeSpan(s: Span) {
+    if (s.hidden) {
+      this.cables.setMatrixAt(s.idx, this.m.makeScale(0, 0, 0));
+      return;
+    }
+    const dx = s.b.x - s.a.x;
+    const dz = s.b.z - s.a.z;
+    const len = Math.hypot(dx, dz);
+    const k = len / 30;
+    this.q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, Math.atan2(-dz, dx));
+    // たるみは長さの 2 乗に比例させる
+    this.s.set(k, k * k, 1);
+    this.p.set(s.a.x, 0, s.a.z);
+    this.cables.setMatrixAt(s.idx, this.m.compose(this.p, this.q, this.s));
   }
 
   private compose(it: PropItem) {
-    const mesh = this.meshes[it.kind];
     this.p.set(it.x, 0, it.z);
     this.q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, it.yaw);
     this.s.set(1, 1, 1);
@@ -354,9 +424,7 @@ export class Props {
       this.p.set(it.x, 0, it.z);
     }
     this.m.compose(this.p, this.q, this.s);
-    mesh.setMatrixAt(it.idx, this.m);
-    if (it.kind === 'car') this.carDark.setMatrixAt(it.idx, this.m);
-    if (it.kind === 'lamp') this.lampHeads.setMatrixAt(it.idx, this.m);
+    for (const mesh of this.parts[it.kind]) mesh.setMatrixAt(it.idx, this.m);
   }
 
   /** 周囲の小物を列挙する（ショベルカーの当たり判定用） */
@@ -370,7 +438,7 @@ export class Props {
     }
   }
 
-  /** 倒す・潰す。倒した小物の種類を返す */
+  /** 倒す・潰す。電柱が倒れたら、つながった電線も切れる */
   knock(it: PropItem, dirX: number, dirZ: number) {
     if (it.state !== 0) return;
     it.state = 1;
@@ -379,6 +447,15 @@ export class Props {
     it.dirX = dirX / len;
     it.dirZ = dirZ / len;
     this.animating.add(it);
+    if (it.kind === 'pole') {
+      for (const s of this.spans) {
+        if (!s.hidden && (s.a === it || s.b === it)) {
+          s.hidden = true;
+          this.placeSpan(s);
+          this.cables.instanceMatrix.needsUpdate = true;
+        }
+      }
+    }
   }
 
   update(dt: number) {
@@ -392,14 +469,14 @@ export class Props {
         this.animating.delete(it);
       }
     }
-    for (const k of ['car', 'tree', 'lamp'] as const)
-      this.meshes[k].instanceMatrix.needsUpdate = true;
-    this.lampHeads.instanceMatrix.needsUpdate = true;
-    this.carDark.instanceMatrix.needsUpdate = true;
+    for (const list of Object.values(this.parts))
+      for (const mesh of list) mesh.instanceMatrix.needsUpdate = true;
   }
 
-  /** 街灯の点灯具合（時間帯） */
+  /** 街灯・信号の点灯具合（時間帯） */
   setLampLevel(level: number) {
     this.lampHeadMaterial.emissiveIntensity = level * 2.2;
+    // 信号は昼でも点いている。夜はにじんで見えるよう強める
+    this.lensMaterial.color.setScalar(0.55 + level * 0.5);
   }
 }

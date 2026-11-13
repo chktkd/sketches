@@ -40,6 +40,8 @@ interface Preset {
   hemi: { sky: number; ground: number; intensity: number };
   /** 雲量 0..1 */
   cloud: number;
+  /** 光芒（ゴッドレイ）の強さ */
+  rays: number;
   /** 最終パスの色調（コントラスト・彩度・色かぶり） */
   grade: { contrast: number; saturation: number; tint: [number, number, number] };
 }
@@ -68,6 +70,7 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     lamps: 0,
     hemi: { sky: 0xbfd9ff, ground: 0x6a6258, intensity: 0.25 },
     cloud: 0.46,
+    rays: 0.22,
     grade: { contrast: 1.04, saturation: 1.06, tint: [1.0, 1.0, 1.0] },
   },
   dusk: {
@@ -93,6 +96,7 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     lamps: 0.7,
     hemi: { sky: 0xffc9a0, ground: 0x3a3340, intensity: 0.2 },
     cloud: 0.5,
+    rays: 0.9,
     grade: { contrast: 1.1, saturation: 1.12, tint: [1.05, 1.0, 0.93] },
   },
   night: {
@@ -112,12 +116,13 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     skylineTint: 0x0d1424,
     skylineLit: 1,
     lit: 0.72,
-    litGain: 3.0,
+    litGain: 1.9,
     bloom: { strength: 0.3, radius: 0.6, threshold: 1.6 },
     stars: 1,
     lamps: 1.6,
     hemi: { sky: 0x5a70b0, ground: 0x23232e, intensity: 0.9 },
     cloud: 0.46,
+    rays: 0,
     grade: { contrast: 1.1, saturation: 0.95, tint: [0.92, 0.97, 1.07] },
   },
 };
@@ -133,6 +138,7 @@ export class Environment {
   /** ヘッドライト・街灯の係数（時間帯で変わる） */
   lamps = 0;
   bloom = { strength: 0.2, radius: 0.5, threshold: 0.9 };
+  rays = 0;
   grade: Preset['grade'] = { contrast: 1, saturation: 1, tint: [1, 1, 1] };
   time: TimeOfDay = 'dusk';
   private readonly sky = new Sky();
@@ -263,6 +269,7 @@ export class Environment {
     this.bloom = { ...p.bloom };
     this.lamps = p.lamps;
     this.grade = p.grade;
+    this.rays = p.rays;
     (this.stars.material as THREE.PointsMaterial).opacity = p.stars;
 
     this.envRT?.dispose();
@@ -300,6 +307,11 @@ export class Environment {
   /** パーティクルが使う、線形フォグに相当する指数フォグの濃さ */
   get dustFogDensity(): number {
     return 1.5 / this.fog.far;
+  }
+
+  /** 太陽の方向（夜は月ではなく本当の太陽。地平線の下） */
+  get trueSunDirection(): THREE.Vector3 {
+    return this.trueSun;
   }
 
   get sunDirection(): THREE.Vector3 {

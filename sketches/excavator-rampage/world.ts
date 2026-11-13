@@ -5,6 +5,7 @@ import { createFacadeMaterial, type FacadeUniforms } from './facade';
 import { GROUND_EXTENT, GroundDecals, paintGround } from './ground';
 import { type CityLayout, generateCity } from './layout';
 import { Props } from './props';
+import { SignBoards } from './signs';
 import { createRng } from './rng';
 import { VoxelWorld } from './voxel';
 import { weatherize } from './weather';
@@ -74,6 +75,7 @@ export class City {
   readonly props: Props;
   readonly dust: DustSystem;
   readonly sparks = new SparkSystem(1500);
+  readonly signs: SignBoards;
   /** 崩壊したビルから立ちのぼる煙 */
   private smokes: { x: number; y: number; z: number; t: number; life: number; power: number }[] =
     [];
@@ -228,7 +230,9 @@ export class City {
     this.group.add(decalMesh);
 
     this.buildRoofProps();
-    this.props = new Props(this.layout.props);
+    this.signs = new SignBoards(this.layout.buildings, this.voxels);
+    this.group.add(this.signs.mesh);
+    this.props = new Props(this.layout.props, quality === QUALITY_LOW ? 240 : 480);
     this.group.add(this.props.group);
 
     this.dust = new DustSystem(quality.dust);
@@ -530,6 +534,7 @@ export class City {
     this.updateSmokes(dt);
     this.sparks.update(dt);
     this.updateRoofProps();
+    this.signs.update(this.voxels, (m) => this.breakSign(m));
     this.props.update(dt);
     this.dust.update(dt);
     this.decals.flush(dt);
@@ -692,6 +697,30 @@ export class City {
         });
       }
     }
+  }
+
+  /** 看板が外れて落ちる: 板の破片と火花 */
+  private breakSign(m: THREE.Matrix4) {
+    const p = new THREE.Vector3().setFromMatrixPosition(m);
+    const r = this.rng;
+    for (let i = 0; i < 3; i++) {
+      this.shardPool.spawn({
+        x: p.x,
+        y: p.y + (r.next() - 0.5) * 3,
+        z: p.z,
+        vx: (r.next() - 0.5) * 4,
+        vy: r.next() * 2,
+        vz: (r.next() - 0.5) * 4,
+        wx: (r.next() - 0.5) * 8,
+        wy: (r.next() - 0.5) * 8,
+        wz: (r.next() - 0.5) * 8,
+        sx: 0.9,
+        sy: 1.4,
+        sz: 0.05,
+        color: [0.85, 0.5, 0.35],
+      });
+    }
+    this.sparks.emit(p.x, p.y, p.z, 12, 0, 0, 0);
   }
 
   /** 載っている屋根が壊れた設備は、破片になって落ちる */

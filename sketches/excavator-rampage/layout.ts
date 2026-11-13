@@ -26,7 +26,7 @@ export interface Lot {
 }
 
 export interface PropSpec {
-  type: 'car' | 'tree' | 'lamp';
+  type: 'car' | 'tree' | 'lamp' | 'pole' | 'signal';
   x: number;
   z: number;
   /** ラジアン。0 で +X 向き */
@@ -191,6 +191,30 @@ export function generateCity(seed = 20261113): CityLayout {
         props.push({ type: isLamp ? 'lamp' : 'tree', x: c, z: edge, rot: 0, v: rng.next() });
         props.push({ type: isLamp ? 'lamp' : 'tree', x: edge, z: c, rot: 0, v: rng.next() });
       }
+    }
+  }
+  // 電柱: 各道路の北・西側の歩道に 30m おき。街路樹・街灯（c が 4 で割って 2 余る位置）と重ならない
+  for (let i = 0; i <= BLOCKS; i++) {
+    const edge = i * PITCH - 0.8;
+    for (let c = 4; c < GRID_N - 2; c += 20) {
+      if (isRoadCoord(c)) continue;
+      props.push({ type: 'pole', x: c, z: edge, rot: 0, v: rng.next() });
+      props.push({ type: 'pole', x: edge, z: c, rot: Math.PI / 2, v: rng.next() });
+    }
+  }
+  // 信号機: 各交差点の対角 2 か所。腕が車道の上へ張り出す
+  for (let i = 0; i <= BLOCKS; i++) {
+    for (let j = 0; j <= BLOCKS; j++) {
+      const x0 = i * PITCH;
+      const z0 = j * PITCH;
+      props.push({ type: 'signal', x: x0 - 0.6, z: z0 - 0.6, rot: -Math.PI / 2, v: rng.next() });
+      props.push({
+        type: 'signal',
+        x: x0 + ROAD_CELLS + 0.6,
+        z: z0 + ROAD_CELLS + 0.6,
+        rot: Math.PI / 2,
+        v: rng.next(),
+      });
     }
   }
   // 交差点の車は邪魔なので間引く: 交差点内の位置は後段（world）で弾く

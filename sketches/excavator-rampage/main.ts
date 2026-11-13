@@ -103,6 +103,7 @@ function boot() {
     post.setGrade(env.grade);
     ex.setLights(env.lamps);
     city.props.setLampLevel(env.lamps);
+    city.signs.setLevel(env.lamps);
     $('time-label').textContent = TIME_LABEL[t];
     store.set('time', t);
   };
@@ -212,6 +213,7 @@ function boot() {
   const focus = new THREE.Vector3();
   const tmp = new THREE.Vector3();
   const tmp2 = new THREE.Vector3();
+  const sunUV = new THREE.Vector2();
   let lastTread = { x: ex.x, z: ex.z };
   let dustTimer = 0;
   let loadAvg = 0;
@@ -347,6 +349,18 @@ function boot() {
     terrain.update(time);
     wind.uTime.value = time;
     env.followShadow(tmp.set(ex.x, 0, ex.z));
+
+    // 光芒: 太陽が画面の前方にあるときだけ。画面端へ離れるほど弱める
+    {
+      const sd = env.trueSunDirection;
+      tmp2.copy(camera.position).addScaledVector(sd, 1000).project(camera);
+      const front = tmp2.z < 1;
+      const edge = Math.max(Math.abs(tmp2.x), Math.abs(tmp2.y));
+      const k = front ? THREE.MathUtils.smoothstep(1.7 - edge, 0, 1.2) : 0;
+      sunUV.set((tmp2.x + 1) / 2, (tmp2.y + 1) / 2);
+      env.sunTint(sunColor);
+      post.setGodRays(sunUV, env.rays * k, sunColor);
+    }
 
     // 照準の表示（30Hz）
     reticleTimer -= dt;
