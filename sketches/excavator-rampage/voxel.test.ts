@@ -119,4 +119,46 @@ describe('VoxelWorld', () => {
     w6.remove(right);
     expect(w6.fracturedFaces(target)).toBe(1); // +x のビットだけ
   });
+
+  it('柱が立っている: 各ビルの四隅は柱で、柱の位置は全階をつらぬく', () => {
+    for (let i = 0; i < world.buildings.length; i += 9) {
+      const b = world.buildings[i]!;
+      const s = b.spec;
+      for (const [x, z] of [
+        [0, 0],
+        [s.w - 1, 0],
+        [0, s.d - 1],
+        [s.w - 1, s.d - 1],
+      ] as const) {
+        for (let y = 0; y < s.layers; y++) {
+          const id = world.idAt(s.x0 + x, y, s.z0 + z);
+          expect(id, `building ${i} (${x},${z}) y=${y}`).toBeGreaterThanOrEqual(0);
+          expect(world.kind[id]).toBe(2);
+        }
+      }
+    }
+  });
+
+  it('外壁（非構造）をすべて壊しても、柱と床の骨組みは倒れずに残る', () => {
+    const w7 = new VoxelWorld(city.buildings);
+    const bi = city.buildings.findIndex((b) => b.floors >= 5 && b.w >= 7);
+    const b = w7.buildings[bi]!;
+    for (let id = b.start; id < b.start + b.count; id++) if (w7.kind[id] === 0) w7.remove(id);
+    expect(w7.findUnsupported(bi)).toEqual([]);
+    expect(b.alive).toBeGreaterThan(0);
+  });
+
+  it('ある階の柱をすべて壊すと、その上の階が落ちる（骨組みの損失で崩壊する）', () => {
+    const w8 = new VoxelWorld(city.buildings);
+    const bi = city.buildings.findIndex((b) => b.floors >= 5 && b.w >= 7);
+    const b = w8.buildings[bi]!;
+    for (let id = b.start; id < b.start + b.count; id++) {
+      if (w8.kind[id] === 2 && w8.iy[id] === 3) w8.remove(id);
+    }
+    const falling = w8.findUnsupported(bi);
+    const above = [...Array(b.count).keys()]
+      .map((k) => b.start + k)
+      .filter((id) => w8.alive[id] && (w8.iy[id] as number) >= 3);
+    expect(new Set(falling)).toEqual(new Set(above));
+  });
 });

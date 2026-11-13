@@ -1,9 +1,14 @@
 import { GRID_N, GRID_Y } from './config';
 import type { BuildingSpec, FacadeStyle } from './layout';
 
-/** セルの種類: 0 外壁（窓つき）/ 1 コンクリート（床スラブ・屋根） */
+/** セルの種類: 0 外壁（窓つき・非構造）/ 1 コンクリート（床スラブ・屋根）/ 2 柱 */
 export const KIND_WALL = 0;
 export const KIND_SLAB = 1;
+/** 鉄筋コンクリートの柱。外壁（窓・間仕切り）と違って、床を支える構造材 */
+export const KIND_COLUMN = 2;
+
+/** 構造材か。外壁（KIND_WALL）は構造を支えない間仕切りで、壊れても建物は倒れない */
+export const isStructural = (kind: number): boolean => kind !== KIND_WALL;
 
 export interface BuildingRange {
   spec: BuildingSpec;
@@ -85,7 +90,7 @@ export class VoxelWorld {
           this.bld[id] = bi;
           this.alive[id] = 1;
           this.ids[VoxelWorld.index(gx, y, gz)] = id;
-          layerTotal[y] = (layerTotal[y] as number) + 1;
+          if (isStructural(k)) layerTotal[y] = (layerTotal[y] as number) + 1;
         }
       }
     }
@@ -134,7 +139,9 @@ export class VoxelWorld {
     const b = this.buildings[this.bld[id] as number] as BuildingRange;
     b.alive--;
     const layer = this.iy[id] as number;
-    b.layerAlive[layer] = (b.layerAlive[layer] as number) - 1;
+    if (isStructural(this.kind[id] as number)) {
+      b.layerAlive[layer] = (b.layerAlive[layer] as number) - 1;
+    }
     b.dirty = true;
     return true;
   }
@@ -198,9 +205,30 @@ export class VoxelWorld {
   }
 }
 
+/** 柱を立てる位置: 4〜5 セル間隔で等分し、両端を必ず含む */
+export function columnLines(n: number): number[] {
+  const k = Math.max(1, Math.ceil((n - 1) / 4));
+  const out = new Set<number>();
+  for (let i = 0; i <= k; i++) out.add(Math.round((i * (n - 1)) / k));
+  return [...out];
+}
+
+const columnCache = new WeakMap<BuildingSpec, { xs: Set<number>; zs: Set<number> }>();
+function columns(s: BuildingSpec) {
+  let c = columnCache.get(s);
+  if (!c) {
+    c = { xs: new Set(columnLines(s.w)), zs: new Set(columnLines(s.d)) };
+    columnCache.set(s, c);
+  }
+  return c;
+}
+
 /** セル (x,y,z) はビル内ローカル座標。-1 ならセルなし */
 function cellKind(s: BuildingSpec, x: number, y: number, z: number): number {
   if (y === s.layers) return KIND_SLAB; // 屋根スラブ
+  // 柱: 全階を貫く。外周では壁面に出る壁柱、内部では空洞の中に立つ
+  const c = columns(s);
+  if (c.xs.has(x) && c.zs.has(z)) return KIND_COLUMN;
   const perimeter = x === 0 || z === 0 || x === s.w - 1 || z === s.d - 1;
   if (perimeter) return KIND_WALL;
   // 各階の床スラブ（偶数層）。奇数層の内部は空洞

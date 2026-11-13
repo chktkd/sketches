@@ -117,7 +117,7 @@ normal = bumpNormal(-vViewPosition, normal, fH, faceDirection);`
 totalEmissiveRadiance += fEmit;`
       );
   };
-  material.customProgramCacheKey = () => 'facade-v3';
+  material.customProgramCacheKey = () => 'facade-v4';
   return { material, uniforms };
 }
 
@@ -231,6 +231,7 @@ void facade(vec3 p, vec3 ln, vec4 info, float cut, float brk, out vec3 alb, out 
   float style = floor(info.y + 0.5);
   float kind = floor(info.z + 0.5);
   float dmg = floor(info.w + 0.5);
+  float mode0 = dmg;
   bool side = an.y < 0.5;
   vec2 uv = an.x > 0.5 ? vec2(p.z, p.y) : (an.z > 0.5 ? vec2(p.x, p.y) : p.xz);
   float aa = max(max(fwidth(uv.x), fwidth(uv.y)) * 0.75, 0.003);
@@ -389,6 +390,22 @@ void facade(vec3 p, vec3 ln, vec4 info, float cut, float brk, out vec3 alb, out 
     rou = mix(rou, 0.5, lod);
     met = mix(met, 0.3 * gf, lod);
     emi = mix(emi, vec3(1.0, 0.76, 0.5) * uLit * gf * 0.5 * uLitGain * 0.7, lod);
+  }
+
+  // ひび割れ: 壊れた箇所の周囲のセル（静的なセルでは aBreak がひびの強さ 0..1）に、細い亀裂を走らせる。
+  // 線の太さは一定にし、現れる範囲を世界座標のノイズで切るので、セルの境界で急に途切れない
+  if (mode0 < 0.5 && brk > 0.01) {
+    vec2 cuv = an.y > 0.5 ? p.xz : uv;
+    float c1 = fbm2(cuv * 1.5 + seed * 0.37);
+    float c2 = fbm2(cuv * 3.1 + 41.0 + seed);
+    float l1 = 1.0 - smoothstep(0.004, 0.011 + fwidth(c1) * 1.5, abs(c1 - 0.5));
+    float l2 = (1.0 - smoothstep(0.003, 0.008 + fwidth(c2) * 1.5, abs(c2 - 0.5))) * 0.8;
+    float reach = smoothstep(0.5, 0.68, fbm2(cuv * 0.55 + seed + 9.0) + brk * 0.3);
+    float crack = max(l1, l2) * reach;
+    alb = mix(alb, vec3(0.05, 0.045, 0.04), crack * 0.9);
+    hgt -= crack * 0.035;
+    emi *= 1.0 - crack * 0.5;
+    rou = mix(rou, 0.9, crack);
   }
 
   // 破断面: 割れた面・壊れて露出した面は、骨材の見えるコンクリートの断面にする

@@ -337,6 +337,7 @@ function boot() {
     const fovScale =
       renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
     // 描画バッファの高さではなく CSS ピクセル換算（Points の大きさは drawing buffer 基準）
+    city.focus.copy(camera.position);
     city.update(dt, sunColor, ambient, env.fog.color, env.dustFogDensity, fovScale);
 
     focus.set(ex.x, 7 * MACHINE_SCALE, ex.z);

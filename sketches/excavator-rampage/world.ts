@@ -105,6 +105,18 @@ export class City {
   private roofBoxes!: THREE.InstancedMesh;
   private roofCyls!: THREE.InstancedMesh;
   private roofDirty = false;
+  /** 静的なセルの aBreak（ひび割れの強さ 0..1） */
+  private staticBreak!: THREE.InstancedBufferAttribute;
+  private crackDirty = false;
+  /** ビルごとの、これまでに壊れたセルの重心（倒れる向きを決める） */
+  private dmgX!: Float32Array;
+  private dmgZ!: Float32Array;
+  private dmgN!: Float32Array;
+  private brokenCell!: Int32Array;
+  private brokenT!: Float32Array;
+  private time = 0;
+  /** 粉塵などを出す範囲の判定に使うカメラ位置（main が毎フレーム設定する） */
+  readonly focus = new THREE.Vector3(1e9, 0, 1e9);
   private originArr!: Float32Array;
   private infoArr!: Float32Array;
   /** 壊れた壁に隣接して欠けた、断面を持つセル（静的メッシュから移して描画する） */
@@ -163,7 +175,8 @@ export class City {
       info[id * 4 + 2] = this.voxels.kind[id] as number;
       info[id * 4 + 3] = 0;
       const j = 0.97 + rnd.next() * 0.06;
-      const slab = this.voxels.kind[id] === 1;
+      // 床スラブ・柱は無塗装コンクリートの色
+      const slab = this.voxels.kind[id] !== 0;
       const k = slab ? 0.35 : 1;
       this.colors[id * 3] = (b.tint[0] * k + (1 - k) * 0.85) * j;
       this.colors[id * 3 + 1] = (b.tint[1] * k + (1 - k) * 0.85) * j;
@@ -172,7 +185,11 @@ export class City {
     this.staticMesh.instanceColor = new THREE.InstancedBufferAttribute(this.colors.slice(), 3);
     geo.setAttribute('aOrigin', new THREE.InstancedBufferAttribute(origin, 3));
     geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 4));
-    geo.setAttribute('aBreak', new THREE.InstancedBufferAttribute(new Float32Array(n), 1));
+    this.staticBreak = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
+    geo.setAttribute('aBreak', this.staticBreak);
+    this.dmgX = new Float32Array(this.layout.buildings.length);
+    this.dmgZ = new Float32Array(this.layout.buildings.length);
+    this.dmgN = new Float32Array(this.layout.buildings.length);
     this.originArr = origin;
     this.infoArr = info;
     this.staticMesh.castShadow = true;
@@ -209,6 +226,8 @@ export class City {
     // ── 壊れた壁の断面: ギザギザに欠けたセル
     this.brokenCap = quality.maxBroken;
     this.brokenIndex = new Int32Array(n).fill(-1);
+    this.brokenCell = new Int32Array(quality.maxBroken).fill(-1);
+    this.brokenT = new Float32Array(quality.maxBroken);
     const bGeo = new THREE.BoxGeometry(1, 1, 1, 4, 4, 4);
     this.brokenOrigin = new THREE.InstancedBufferAttribute(
       new Float32Array(quality.maxBroken * 3),
@@ -386,7 +405,14 @@ export class City {
   }
 
   /** セルを壊して破片にする。破片の初速は呼び出し側が決める */
-  destroyCell(id: number, vx: number, vy: number, vz: number, shards = true): boolean {
+  destroyCell(
+    id: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    shards = true,
+    ang?: [number, number, number]
+  ): boolean {
     const vw = this.voxels;
     if (!vw.remove(id)) return false;
     (this.staticMesh.instanceMatrix.array as Float32Array).fill(0, id * 16, id * 16 + 16);
@@ -394,6 +420,13 @@ export class City {
     this.stats.destroyedCells++;
     this.unbreak(id);
     this.markNeighborsBroken(id);
+    this.spreadCracks(id);
+    {
+      const bi2 = vw.bld[id] as number;
+      this.dmgX[bi2] = (this.dmgX[bi2] as number) + cellX(vw.ix[id] as number);
+      this.dmgZ[bi2] = (this.dmgZ[bi2] as number) + cellZ(vw.iz[id] as number);
+      this.dmgN[bi2] = (this.dmgN[bi2] as number) + 1;
+    }
     const x = cellX(vw.ix[id] as number);
     const y = cellY(vw.iy[id] as number);
     const z = cellZ(vw.iz[id] as number);
@@ -412,13 +445,31 @@ export class City {
       vx,
       vy,
       vz,
-      wx: (r.next() - 0.5) * 4 * rotK,
-      wy: (r.next() - 0.5) * 4 * rotK,
-      wz: (r.next() - 0.5) * 4 * rotK,
+      wx: ang ? ang[0] + (r.next() - 0.5) * 0.8 : (r.next() - 0.5) * 4 * rotK,
+      wy: ang ? ang[1] + (r.next() - 0.5) * 0.8 : (r.next() - 0.5) * 4 * rotK,
+      wz: ang ? ang[2] + (r.next() - 0.5) * 0.8 : (r.next() - 0.5) * 4 * rotK,
       // 立方体のままにしない: 床スラブは薄い板、壁は厚みのある壁板に近い寸法にばらつかせる
-      sx: CELL * (vw.kind[id] === 1 ? r.range(0.8, 1.05) : r.range(0.7, 1.05)),
-      sy: CELL * (vw.kind[id] === 1 ? r.range(0.38, 0.62) : r.range(0.7, 1.05)),
-      sz: CELL * (vw.kind[id] === 1 ? r.range(0.8, 1.05) : r.range(0.5, 1.0)),
+      sx:
+        CELL *
+        (vw.kind[id] === 1
+          ? r.range(0.8, 1.05)
+          : vw.kind[id] === 2
+            ? r.range(0.65, 0.9)
+            : r.range(0.7, 1.05)),
+      sy:
+        CELL *
+        (vw.kind[id] === 1
+          ? r.range(0.38, 0.62)
+          : vw.kind[id] === 2
+            ? r.range(0.9, 1.1)
+            : r.range(0.7, 1.05)),
+      sz:
+        CELL *
+        (vw.kind[id] === 1
+          ? r.range(0.8, 1.05)
+          : vw.kind[id] === 2
+            ? r.range(0.65, 0.9)
+            : r.range(0.5, 1.0)),
       q: [r.next() - 0.5, r.next() - 0.5, r.next() - 0.5, r.next() * 0.5 + 0.5],
       origin: [x, y, z],
       info: [Math.floor(b.seed), b.style, vw.kind[id] as number, 1],
@@ -456,7 +507,7 @@ export class City {
       }
     }
     // 鉄筋が折れて飛ぶ
-    if (r.chance(0.2)) {
+    if (r.chance(vw.kind[id] === 2 ? 0.55 : 0.2)) {
       const len = r.range(1.0, 2.6);
       const a = r.next() * Math.PI * 2;
       const ax = Math.cos(a);
@@ -504,6 +555,77 @@ export class City {
 
   /* ───────── 壊れた壁の断面（欠けたセル）と鉄筋 ───────── */
 
+  /** 壊れた箇所の周囲 2 セルにひびを走らせる（近いほど強い） */
+  private spreadCracks(id: number) {
+    const vw = this.voxels;
+    const x = vw.ix[id] as number;
+    const y = vw.iy[id] as number;
+    const z = vw.iz[id] as number;
+    const arr = this.staticBreak.array as Float32Array;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (!dx && !dy && !dz) continue;
+          const nid = vw.idAt(x + dx, y + dy, z + dz);
+          if (nid < 0 || (this.brokenIndex[nid] as number) >= 0) continue;
+          const level = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) === 1 ? 1 : 0.55;
+          if ((arr[nid] as number) < level) {
+            arr[nid] = level;
+            this.crackDirty = true;
+          }
+        }
+      }
+    }
+  }
+
+  /** 欠けた断面から、粉や小片がしばらくのあいだ崩れ続ける */
+  private trickle(dt: number) {
+    if (this.brokenCount === 0) return;
+    for (let k = 0; k < 3; k++) {
+      if (Math.random() > dt * 2.5) continue;
+      const bi = Math.floor(Math.random() * this.brokenCount);
+      const cell = this.brokenCell[bi] as number;
+      if (cell < 0 || (this.brokenIndex[cell] as number) !== bi) continue;
+      const age = this.time - (this.brokenT[bi] as number);
+      if (age > 30) continue;
+      const x = this.originArr[cell * 3] as number;
+      const y = this.originArr[cell * 3 + 1] as number;
+      const z = this.originArr[cell * 3 + 2] as number;
+      if (Math.hypot(x - this.focus.x, z - this.focus.z) > 170) continue;
+      const fade = 1 - age / 30;
+      this.dust.emit({
+        count: 1,
+        x,
+        y,
+        z,
+        spread: 1.4,
+        speed: 0.5,
+        size: 1.4,
+        life: 2.8,
+        tone: 0.72,
+        alpha: 0.1 + 0.1 * fade,
+      });
+      if (Math.random() < 0.55) {
+        const s = 0.08 + Math.random() * 0.16;
+        this.shardPool.spawn({
+          x: x + (Math.random() - 0.5),
+          y,
+          z: z + (Math.random() - 0.5),
+          vx: (Math.random() - 0.5) * 1.2,
+          vy: 0,
+          vz: (Math.random() - 0.5) * 1.2,
+          wx: (Math.random() - 0.5) * 6,
+          wy: (Math.random() - 0.5) * 6,
+          wz: (Math.random() - 0.5) * 6,
+          sx: s * 1.3,
+          sy: s,
+          sz: s * 1.1,
+          color: [0.5, 0.49, 0.46],
+        });
+      }
+    }
+  }
+
   /** 壊したセルの隣のうち、壊れて新しく面が露出したものを「欠けたセル」へ移す */
   private markNeighborsBroken(id: number) {
     const vw = this.voxels;
@@ -532,6 +654,8 @@ export class City {
       bi = this.brokenFree.pop() ?? (this.brokenCount < this.brokenCap ? this.brokenCount++ : -1);
       if (bi < 0) return; // 上限: 欠けずにそのまま残す
       this.brokenIndex[nid] = bi;
+      this.brokenCell[bi] = nid;
+      this.brokenT[bi] = this.time;
       const sm = this.staticMesh.instanceMatrix.array as Float32Array;
       (this.brokenMesh.instanceMatrix.array as Float32Array).set(
         sm.subarray(nid * 16, nid * 16 + 16),
@@ -576,6 +700,7 @@ export class City {
       (this.brokenMesh.instanceMatrix.array as Float32Array).fill(0, bi * 16, bi * 16 + 16);
       this.brokenBreak.setX(bi, 0);
       this.brokenFree.push(bi);
+      this.brokenCell[bi] = -1;
       this.brokenIndex[id] = -1;
       this.brokenDirty = true;
     }
@@ -607,10 +732,11 @@ export class City {
     const m4 = new THREE.Matrix4();
     const scl = new THREE.Vector3();
     for (let b = 0; b < 6; b++) {
-      if (!(bits & (1 << b)) || !r.chance(0.5)) continue;
+      // 柱の断面は鉄筋が密に出る
+      if (!(bits & (1 << b)) || !r.chance(vw.kind[cell] === 2 ? 0.95 : 0.5)) continue;
       const a = axes[b] as number;
       const sg = signs[b] as number;
-      for (let k = r.chance(0.5) ? 2 : 1; k > 0; k--) {
+      for (let k = vw.kind[cell] === 2 ? 3 : r.chance(0.5) ? 2 : 1; k > 0; k--) {
         n.set(a === 0 ? sg : 0, a === 1 ? sg : 0, a === 2 ? sg : 0);
         // 面の中で位置をずらし、断面の奥から外へ向けて少し傾けて出す
         pos.set(cx, cy, cz).addScaledVector(n, CELL / 2 - 0.35);
@@ -815,6 +941,8 @@ export class City {
     this.shardPool.update(dt);
     this.rebarPool.update(dt);
     this.flushBroken();
+    this.time += dt;
+    this.trickle(dt);
     this.updateSmokes(dt);
     this.sparks.update(dt);
     this.updateRoofProps();
@@ -955,6 +1083,10 @@ export class City {
   }
 
   private flushBroken() {
+    if (this.crackDirty) {
+      this.staticBreak.needsUpdate = true;
+      this.crackDirty = false;
+    }
     if (this.brokenDirty) {
       this.brokenMesh.instanceMatrix.needsUpdate = true;
       this.brokenMesh.instanceColor!.needsUpdate = true;
@@ -1060,19 +1192,54 @@ export class City {
     const cx = cellX(sp.x0 + sp.w / 2 - 0.5);
     const cz = cellZ(sp.z0 + sp.d / 2 - 0.5);
     const r = this.rng;
+    // 損傷が集中した側へ傾いて倒れる: 支えを失った上の部分が、反対側の縁を支点に回転する
+    const n = this.dmgN[bi] as number;
+    let dX = n > 0 ? (this.dmgX[bi] as number) / n - cx : 0;
+    let dZ = n > 0 ? (this.dmgZ[bi] as number) / n - cz : 0;
+    let dl = Math.hypot(dX, dZ);
+    if (dl < 1.5) {
+      const a = r.next() * Math.PI * 2;
+      dX = Math.cos(a);
+      dZ = Math.sin(a);
+      dl = 1;
+    }
+    dX /= dl;
+    dZ /= dl;
+    let minY = 1e9;
+    for (const id of ids) minY = Math.min(minY, cellY(this.voxels.iy[id] as number));
+    const half = Math.max(sp.w, sp.d) * CELL * 0.4;
+    const hx = cx - dX * half;
+    const hz = cz - dZ * half;
+    const k = Math.min(1, ids.length / 260) * (0.3 + r.next() * 0.22);
+    const wa = k * dZ;
+    const wb = -k * dX;
     for (const id of ids) {
       const x = cellX(this.voxels.ix[id] as number);
+      const y = cellY(this.voxels.iy[id] as number);
       const z = cellZ(this.voxels.iz[id] as number);
-      const dx = x - cx;
-      const dz = z - cz;
-      const len = Math.hypot(dx, dz) + 0.5;
-      // 中心から外へ少し膨らみながら崩れ落ちる
+      const rx = x - hx;
+      const ry = y - minY;
+      const rz = z - hz;
+      // v = ω × r（ω は水平軸まわり）。高いほど大きく倒れ込む
+      let vx = k * dX * ry;
+      let vy = -k * (dX * rx + dZ * rz);
+      let vz = k * dZ * ry;
+      const sp2 = Math.hypot(vx, vy, vz);
+      if (sp2 > 15) {
+        vx *= 15 / sp2;
+        vy *= 15 / sp2;
+        vz *= 15 / sp2;
+      }
+      const ox = x - cx;
+      const oz = z - cz;
+      const ol = Math.hypot(ox, oz) + 0.5;
       this.destroyCell(
         id,
-        (dx / len) * (1 + r.next() * 3),
-        -r.next() * 2,
-        (dz / len) * (1 + r.next() * 3),
-        r.chance(0.3)
+        vx + (ox / ol) * r.next() * 1.2,
+        vy - r.next() * 1.5,
+        vz + (oz / ol) * r.next() * 1.2,
+        r.chance(0.3),
+        [wa, 0, wb]
       );
     }
     const big = ids.length;
