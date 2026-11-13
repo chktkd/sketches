@@ -69,7 +69,7 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     fogDensity: 0.0028,
     lit: 0.34,
     litGain: 2.0,
-    bloom: { strength: 0.32, radius: 0.7, threshold: 0.85 },
+    bloom: { strength: 0.18, radius: 0.55, threshold: 1.05 },
     stars: 0,
     lamps: 0.7,
     hemi: { sky: 0xffc9a0, ground: 0x3a3340, intensity: 0.2 },
