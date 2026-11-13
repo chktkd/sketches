@@ -81,6 +81,7 @@ function boot() {
 
   const post = new PostFX(renderer, scene, camera, [
     city.dust.points,
+    city.sparks.points,
     env.celestial.group,
     env.stars,
   ]);
@@ -270,6 +271,7 @@ function boot() {
       const n = city.smashBox(box, ex.velocityOf(vol, dt), {
         kick: vol.kick,
         margin: vol.kick ? 0.7 : 0.5,
+        sparks: vol.name === 'bucket',
       });
       if (
         vol.name.startsWith('arm') ||

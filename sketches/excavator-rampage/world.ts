@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CELL, GRID_N, GRID_Y, HALF, WORLD_SIZE, cellX, cellY, cellZ } from './config';
-import { DebrisPool, DustSystem, type ImpactEvent, RubbleMap } from './debris';
+import { DebrisPool, DustSystem, type ImpactEvent, RubbleMap, SparkSystem } from './debris';
 import { createFacadeMaterial, type FacadeUniforms } from './facade';
 import { GROUND_EXTENT, GroundDecals, paintGround } from './ground';
 import { type CityLayout, generateCity } from './layout';
@@ -73,6 +73,10 @@ export class City {
   readonly rubble = new RubbleMap();
   readonly props: Props;
   readonly dust: DustSystem;
+  readonly sparks = new SparkSystem(1500);
+  /** 崩壊したビルから立ちのぼる煙 */
+  private smokes: { x: number; y: number; z: number; t: number; life: number; power: number }[] =
+    [];
   readonly decals: GroundDecals;
   readonly facade: FacadeUniforms;
   readonly stats: CityStats;
@@ -186,7 +190,7 @@ export class City {
     this.group.add(shardMesh);
 
     const impact = (e: ImpactEvent) => this.handleImpact(e);
-    this.cellPool = new DebrisPool(cellMesh, this.voxels, this.rubble, impact);
+    this.cellPool = new DebrisPool(cellMesh, this.voxels, this.rubble, impact, false, true);
     this.shardPool = new DebrisPool(shardMesh, this.voxels, this.rubble, impact, true);
 
     // ── 地面
@@ -228,7 +232,7 @@ export class City {
     this.group.add(this.props.group);
 
     this.dust = new DustSystem(quality.dust);
-    this.group.add(this.dust.points);
+    this.group.add(this.dust.points, this.sparks.points);
   }
 
   /** ワールド座標 (x,z) の真下に立っているセルの最上段の高さ。なければ 0 */
@@ -359,7 +363,7 @@ export class City {
   smashBox(
     box: WorldBox,
     velAt: (p: THREE.Vector3, out: THREE.Vector3) => void,
-    opts: { margin?: number; kick?: boolean } = {}
+    opts: { margin?: number; kick?: boolean; sparks?: boolean } = {}
   ): number {
     const m = opts.margin ?? 0.5;
     const { center: c, ax, ay, az, half: h } = box;
@@ -373,6 +377,12 @@ export class City {
     const z0 = Math.max(0, Math.floor((c.z - ez + HALF) / CELL));
     const z1 = Math.min(GRID_N - 1, Math.floor((c.z + ez + HALF) / CELL));
     let destroyed = 0;
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    let cvx = 0;
+    let cvy = 0;
+    let cvz = 0;
     const ids = this.voxels.ids;
     this.dustBudget = 14;
     for (let iy = y0; iy <= y1; iy++) {
@@ -401,7 +411,29 @@ export class City {
             vel.z * 0.9 + ((v.z - c.z) / out) * spray + (r.next() - 0.5) * 3
           );
           destroyed++;
+          cx += v.x;
+          cy += v.y;
+          cz += v.z;
+          cvx += vel.x;
+          cvy += vel.y;
+          cvz += vel.z;
         }
+      }
+    }
+    // 鋼鉄の刃がコンクリートを砕く瞬間の火花
+    if (opts.sparks && destroyed > 0) {
+      const k = 1 / destroyed;
+      const speed = Math.hypot(cvx, cvy, cvz) * k;
+      if (speed > 6) {
+        this.sparks.emit(
+          cx * k,
+          cy * k,
+          cz * k,
+          Math.min(70, 8 + destroyed * 3),
+          cvx * k,
+          cvy * k,
+          cvz * k
+        );
       }
     }
 
@@ -495,6 +527,8 @@ export class City {
 
     this.cellPool.update(dt);
     this.shardPool.update(dt);
+    this.updateSmokes(dt);
+    this.sparks.update(dt);
     this.updateRoofProps();
     this.props.update(dt);
     this.dust.update(dt);
@@ -509,6 +543,7 @@ export class City {
     u.uFogColor.value.copy(fogColor);
     u.uFogDensity.value = fogDensity;
     u.uScale.value = screenScale;
+    this.sparks.uniforms.uScale.value = screenScale;
   }
 
   /** 屋上の室外機・給水タンク・階段室・アンテナ */
@@ -630,6 +665,35 @@ export class City {
     place(cyls, this.roofCyls, 'cyl');
   }
 
+  /** 崩壊したビルの跡から、しばらく煙が立ち昇る */
+  private updateSmokes(dt: number) {
+    for (let i = this.smokes.length - 1; i >= 0; i--) {
+      const s = this.smokes[i]!;
+      s.t += dt;
+      if (s.t > s.life) {
+        this.smokes.splice(i, 1);
+        continue;
+      }
+      const fade = 1 - s.t / s.life;
+      // 毎秒の粒子数は、威力と残り時間で決まる
+      if (Math.random() < dt * 16 * s.power * (0.3 + fade)) {
+        this.dust.emit({
+          count: 1,
+          x: s.x,
+          y: s.y,
+          z: s.z,
+          spread: 7,
+          speed: 1.2,
+          vy: 11,
+          size: 6 + s.power * 3,
+          life: 6.5,
+          tone: 0.3,
+          alpha: 0.2 + 0.12 * fade,
+        });
+      }
+    }
+  }
+
   /** 載っている屋根が壊れた設備は、破片になって落ちる */
   private updateRoofProps() {
     for (const p of this.roofProps) {
@@ -699,6 +763,14 @@ export class City {
         alpha: 0.5,
       });
       this.decals.rubble(cx, cz, Math.max(sp.w, sp.d) * CELL * 0.9, 0.45);
+      this.smokes.push({
+        x: cx,
+        y: 2,
+        z: cz,
+        t: 0,
+        life: 9 + Math.min(10, big / 40),
+        power: Math.min(1.6, 0.5 + big / 300),
+      });
       this.onCollapse(cx, cz, big);
     }
     if (!b.collapsed && b.alive < b.count * 0.18) {

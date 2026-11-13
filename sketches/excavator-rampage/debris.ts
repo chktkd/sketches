@@ -99,7 +99,9 @@ export class DebrisPool {
     private readonly voxels: VoxelWorld,
     private readonly rubble: RubbleMap,
     private readonly onImpact: (e: ImpactEvent) => void,
-    private readonly groundOnly = false
+    private readonly groundOnly = false,
+    /** 強く着地したセルが、半分の大きさの 8 個に砕ける */
+    private readonly canFracture = false
   ) {
     const cap = mesh.instanceMatrix.count;
     this.cap = cap;
@@ -193,6 +195,63 @@ export class DebrisPool {
       this.w[i * 3 + 2] = (this.w[i * 3 + 2] as number) + (Math.random() - 0.5) * 5;
       this.calm[i] = 0;
       this.grounded[i] = 0;
+    }
+  }
+
+  /** 親を 8 つの半分サイズの立方体に分ける。模様は元のセルの位置から引き継ぐ */
+  private fracture(
+    i: number,
+    x: number,
+    y: number,
+    z: number,
+    qx: number,
+    qy: number,
+    qz: number,
+    qw: number,
+    vx: number,
+    vy: number,
+    vz: number
+  ) {
+    const s = (this.sx[i] as number) / 2;
+    const q = tq.set(qx, qy, qz, qw);
+    const ox = this.origin?.getX(i) ?? x;
+    const oy = this.origin?.getY(i) ?? y;
+    const oz = this.origin?.getZ(i) ?? z;
+    const info = this.info;
+    const ib = info ? (info.getZ(i) as number) : 0;
+    const seed = info ? (info.getX(i) as number) : 0;
+    const style = info ? (info.getY(i) as number) : 0;
+    const colors = this.mesh.instanceColor;
+    const cr = colors ? (colors.getX(i) as number) : 1;
+    const cg = colors ? (colors.getY(i) as number) : 1;
+    const cb = colors ? (colors.getZ(i) as number) : 1;
+    for (let a = -1; a <= 1; a += 2) {
+      for (let b = -1; b <= 1; b += 2) {
+        for (let c = -1; c <= 1; c += 2) {
+          tv.set(a * s * 0.5, b * s * 0.5, c * s * 0.5);
+          const local: [number, number, number] = [tv.x, tv.y, tv.z];
+          tv.applyQuaternion(q);
+          const out = Math.hypot(tv.x, tv.z) + 0.01;
+          this.spawn({
+            x: x + tv.x,
+            y: y + tv.y,
+            z: z + tv.z,
+            vx: vx * 0.5 + (tv.x / out) * (2 + Math.random() * 4) + (Math.random() - 0.5) * 2,
+            vy: vy * (0.5 + Math.random() * 0.8) + Math.random() * 3,
+            vz: vz * 0.5 + (tv.z / out) * (2 + Math.random() * 4) + (Math.random() - 0.5) * 2,
+            wx: (Math.random() - 0.5) * 14,
+            wy: (Math.random() - 0.5) * 14,
+            wz: (Math.random() - 0.5) * 14,
+            sx: s,
+            sy: s,
+            sz: s,
+            q: [qx, qy, qz, qw],
+            origin: [ox + local[0], oy + local[1], oz + local[2]],
+            info: [seed, style, ib, 2],
+            color: [cr * 0.92, cg * 0.92, cb * 0.92],
+          });
+        }
+      }
     }
   }
 
@@ -295,6 +354,14 @@ export class DebrisPool {
         y = ground + ext;
         if (impact > 5)
           this.onImpact({ x, y: ground, z, speed: impact, size: Math.max(sx, sy, sz) });
+        // 高所から落ちた大きな破片は、地面にぶつかって砕ける
+        if (this.canFracture && impact > 11 && sx > 1.2 && Math.random() < 0.55) {
+          this.fracture(i, x, y, z, qx, qy, qz, qw, vx, impact * 0.3, vz);
+          this.state[i] = 0;
+          awake--;
+          arr.fill(0, i * 16, i * 16 + 16);
+          continue;
+        }
         vy = impact > 2.5 ? impact * 0.24 : 0;
         const fr = Math.exp(-5 * step);
         vx *= fr;
@@ -648,6 +715,113 @@ export class DustSystem {
     this.aAlpha.needsUpdate = true;
     this.aRot.needsUpdate = true;
     this.aTone.needsUpdate = true;
+    this.points.geometry.setDrawRange(0, this.high);
+  }
+}
+
+/* ───────────── 火花 ───────────── */
+
+/** 鋼鉄とコンクリートがぶつかる瞬間の火花。加算合成で、ブルームが拾って光る */
+export class SparkSystem {
+  readonly points: THREE.Points;
+  private readonly cap: number;
+  private pos: Float32Array;
+  private vel: Float32Array;
+  private age: Float32Array;
+  private life: Float32Array;
+  private aAge: THREE.BufferAttribute;
+  private aPos: THREE.BufferAttribute;
+  private next = 0;
+  private high = 0;
+  readonly uniforms = { uScale: { value: 800 } };
+
+  constructor(cap = 1500) {
+    this.cap = cap;
+    this.pos = new Float32Array(cap * 3);
+    this.vel = new Float32Array(cap * 3);
+    this.age = new Float32Array(cap).fill(1e9);
+    this.life = new Float32Array(cap).fill(1);
+    const geo = new THREE.BufferGeometry();
+    this.aPos = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
+    this.aAge = new THREE.BufferAttribute(new Float32Array(cap), 1).setUsage(
+      THREE.DynamicDrawUsage
+    );
+    geo.setAttribute('position', this.aPos);
+    geo.setAttribute('aAge', this.aAge);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      fog: false,
+      vertexShader: /* glsl */ `
+        attribute float aAge;
+        uniform float uScale;
+        varying float vAge;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = clamp(0.28 * uScale / max(-mv.z, 0.1), 1.5, 9.0) * (1.0 - 0.6 * aAge);
+          vAge = aAge;
+        }`,
+      fragmentShader: /* glsl */ `
+        varying float vAge;
+        void main() {
+          if (vAge >= 1.0) discard;
+          float d = length(gl_PointCoord - 0.5) * 2.0;
+          float a = smoothstep(1.0, 0.0, d);
+          vec3 hot = mix(vec3(6.0, 4.2, 1.8), vec3(3.2, 0.9, 0.15), vAge);
+          gl_FragColor = vec4(hot * a, a);
+        }`,
+    });
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 11;
+  }
+
+  emit(x: number, y: number, z: number, count: number, vx: number, vy: number, vz: number) {
+    for (let n = 0; n < count; n++) {
+      const i = this.next;
+      this.next = (this.next + 1) % this.cap;
+      this.high = Math.max(this.high, i + 1);
+      this.pos[i * 3] = x + (Math.random() - 0.5) * 1.5;
+      this.pos[i * 3 + 1] = y + (Math.random() - 0.5) * 1.5;
+      this.pos[i * 3 + 2] = z + (Math.random() - 0.5) * 1.5;
+      const sp = 6 + Math.random() * 16;
+      const a = Math.random() * Math.PI * 2;
+      const e = Math.random() * 1.2 - 0.2;
+      this.vel[i * 3] = vx * 0.25 + Math.cos(a) * Math.cos(e) * sp;
+      this.vel[i * 3 + 1] = vy * 0.2 + Math.sin(e) * sp + 3;
+      this.vel[i * 3 + 2] = vz * 0.25 + Math.sin(a) * Math.cos(e) * sp;
+      this.age[i] = 0;
+      this.life[i] = 0.35 + Math.random() * 0.6;
+    }
+  }
+
+  update(dt: number) {
+    const aAge = this.aAge.array as Float32Array;
+    for (let i = 0; i < this.high; i++) {
+      const age = (this.age[i] as number) + dt;
+      this.age[i] = age;
+      const life = this.life[i] as number;
+      if (age >= life) {
+        aAge[i] = 1;
+        continue;
+      }
+      this.vel[i * 3 + 1] = (this.vel[i * 3 + 1] as number) - GRAVITY * dt;
+      const drag = Math.exp(-0.8 * dt);
+      this.vel[i * 3] = (this.vel[i * 3] as number) * drag;
+      this.vel[i * 3 + 2] = (this.vel[i * 3 + 2] as number) * drag;
+      this.pos[i * 3] = (this.pos[i * 3] as number) + (this.vel[i * 3] as number) * dt;
+      this.pos[i * 3 + 1] = Math.max(
+        0.05,
+        (this.pos[i * 3 + 1] as number) + (this.vel[i * 3 + 1] as number) * dt
+      );
+      this.pos[i * 3 + 2] = (this.pos[i * 3 + 2] as number) + (this.vel[i * 3 + 2] as number) * dt;
+      aAge[i] = age / life;
+    }
+    this.aPos.needsUpdate = true;
+    this.aAge.needsUpdate = true;
     this.points.geometry.setDrawRange(0, this.high);
   }
 }

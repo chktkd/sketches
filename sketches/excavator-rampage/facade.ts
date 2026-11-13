@@ -48,7 +48,9 @@ flat varying vec4 vInfo;`
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
-vPat = aOrigin + position * ${CELL.toFixed(4)};
+// 損傷フラグ 2 は「半分に砕けた破片」。模様の大きさを半分にして元のセルの模様を引き継ぐ
+float cs = aInfo.w > 1.5 ? ${(CELL / 2).toFixed(4)} : ${CELL.toFixed(4)};
+vPat = aOrigin + position * cs;
 vLN = normal;
 vInfo = aInfo;`
       );
