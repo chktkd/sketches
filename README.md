@@ -8,13 +8,14 @@ Web 表現の小さなスケッチ集。どれもブラウザだけで動きま�
 
 | スケッチ                                                                       | 内容                                                                 |
 | :----------------------------------------------------------------------------- | :------------------------------------------------------------------- |
+| [巨大ショベルカーで街を壊す](https://chktkd.github.io/sketches/sketches/excavator-rampage/) | 巨大ショベルカーを操って、PBR で描いた街を更地にする WebGL スケッチ |
 | [88x31 バナー工房](https://chktkd.github.io/sketches/sketches/88x31-banner/) | レイヤーとフレームで 88×31 バナーを作り、PNG／アニメ GIF で書き出す |
 
 ## 技術スタック
 
 - TypeScript（strict）＋ Vite（マルチページ）
 - pnpm / mise / Biome / Vitest
-- ランタイム依存なし（外部から読むのは Google Fonts のみ）
+- 3D スケッチは three.js（devDependency としてバンドル）。外部から読むのは Google Fonts のみ
 - GitHub Actions → GitHub Pages
 
 ## 開発
