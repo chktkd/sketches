@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { LIMITS, MIN_BAND, approachBand, forward, groundReach, inverse } from './kinematics';
+import {
+  LIMITS,
+  MAX_AIM_OFFSET,
+  MIN_BAND,
+  approachBand,
+  forward,
+  groundReach,
+  inverse,
+  needsBodyTurn,
+} from './kinematics';
 
 describe('kinematics', () => {
   it('逆運動学の解を順運動学に戻すと、目標の刃先位置・バケット角に一致する', () => {
@@ -51,5 +60,20 @@ describe('approachBand', () => {
     expect(high.far).toBeLessThanOrEqual(low.far);
     expect(high.far).toBeGreaterThan(high.near);
     expect(high.near).toBe(low.near);
+  });
+});
+
+describe('needsBodyTurn', () => {
+  it('正面に近い目標は旋回だけで届き、後方の目標は車体を向け直す', () => {
+    expect(needsBodyTurn(0)).toBe(false);
+    expect(needsBodyTurn(MAX_AIM_OFFSET - 0.01)).toBe(false);
+    expect(needsBodyTurn(MAX_AIM_OFFSET + 0.01)).toBe(true);
+    expect(needsBodyTurn(-Math.PI)).toBe(true);
+    expect(needsBodyTurn(Math.PI)).toBe(true);
+  });
+
+  it('許容する向きのずれは、自動操縦が使う上部旋回の上限（2.4 rad）に十分収まる', () => {
+    expect(MAX_AIM_OFFSET).toBeLessThan(2.4);
+    expect(MAX_AIM_OFFSET).toBeLessThanOrEqual(LIMITS.swing.max);
   });
 });

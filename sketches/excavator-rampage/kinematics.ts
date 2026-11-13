@@ -136,3 +136,12 @@ export function approachBand(
   const desired = clamp(20 - Math.max(0, targetHeight) * 0.35, 13, 21) + 1.2;
   return { near, far: Math.max(desired, near + MIN_BAND) };
 }
+
+/**
+ * 目標が車体の正面から大きくずれているとき（上部旋回だけでは届かない・振り下ろす向きが狂う）、
+ * 構える前に車体そのものを目標へ向ける必要があるか。
+ * headErr は「車体の向き → 目標の方位」の差（ラジアン、-π..π）。
+ */
+export const MAX_AIM_OFFSET = 1.3;
+
+export const needsBodyTurn = (headErr: number): boolean => Math.abs(headErr) > MAX_AIM_OFFSET;

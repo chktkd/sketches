@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { type DriveInput, type Excavator, MACHINE_SCALE } from './excavator';
-import { SWING_Y, approachBand, groundReach, inverse, clamp } from './kinematics';
+import { SWING_Y, approachBand, clamp, groundReach, inverse, needsBodyTurn } from './kinematics';
 import { REST_POSE } from './excavator';
 
 /* ───────────── キーボード ───────────── */
@@ -197,6 +197,10 @@ export class Autopilot {
       if (dh < nearLimit) {
         return { drive: -0.7, turn: clamp(-headErr * 0.8, -0.5, 0.5) };
       }
+      // 目標が正面から大きくずれているなら、構える前に車体を向け直す（旋回だけでは別の方向を叩いてしまう）
+      if (needsBodyTurn(headErr)) {
+        return { drive: 0, turn: clamp(-headErr * 2.2, -1, 1) };
+      }
       this.phase = 'aim';
       this.t = 0;
     }
@@ -215,7 +219,12 @@ export class Autopilot {
         6.5,
         1.8
       );
-      if (this.t > 0.85 && Math.abs(ex.joints.swing.target - ex.joints.swing.angle) < 0.08) {
+      if (
+        this.t > 0.85 &&
+        Math.abs(ex.joints.swing.target - ex.joints.swing.angle) < 0.08 &&
+        // 制限された旋回目標ではなく、実際の目標方位に合っていること
+        Math.abs(swingRel - ex.joints.swing.angle) < 0.2
+      ) {
         this.phase = 'strike';
         this.t = 0;
         const d2 = clamp(dh + 2.4, nearLimit, 29);

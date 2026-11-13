@@ -4,6 +4,7 @@ import { DebrisPool, DustSystem, type ImpactEvent, RubbleMap, SparkSystem } from
 import { createFacadeMaterial, type FacadeUniforms } from './facade';
 import { GROUND_EXTENT, GroundDecals, paintGround } from './ground';
 import { type CityLayout, generateCity } from './layout';
+import { clipRayToSquare } from './ray';
 import { Props } from './props';
 import { SignBoards } from './signs';
 import { createRng } from './rng';
@@ -250,16 +251,19 @@ export class City {
 
   /** 視線レイをボクセルと地面に対して進め、最初に当たった点を返す */
   raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxDist = 600): THREE.Vector3 | null {
+    // 街の外（ズームアウトしたカメラ）から入るレイは、街の範囲の入口から探索を始める
+    const clip = clipRayToSquare(origin, dir, HALF + 40, maxDist);
+    if (!clip) return null;
     const p = new THREE.Vector3();
     const step = 0.6;
-    for (let t = 0; t < maxDist; t += step) {
+    for (let t = clip[0]; t < clip[1]; t += step) {
       p.copy(origin).addScaledVector(dir, t);
       if (p.y <= 0.05) {
-        // 地面に交差する直前を精密に
+        // 地面に交差する点。入口より手前（街の外）で地面に着くなら、街には当たらない
         const k = (origin.y - 0.05) / Math.max(1e-4, -dir.y);
+        if (k < clip[0] - 1e-3) return null;
         return origin.clone().addScaledVector(dir, k);
       }
-      if (Math.abs(p.x) > HALF + 40 || Math.abs(p.z) > HALF + 40) return null;
       if (
         this.voxels.idAt(
           Math.floor((p.x + HALF) / CELL),
