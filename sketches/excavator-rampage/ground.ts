@@ -295,10 +295,20 @@ export function paintGround(layout: CityLayout, size = 4096): GroundTextures {
     });
   }
   for (const pd of puddles) {
-    ctx.fillStyle = 'rgba(9,11,15,0.5)';
+    // 縁を少しずつ暗くする（輪郭のはっきりした楕円にしない）
+    ctx.save();
+    ctx.translate(pd.x, pd.y);
+    ctx.rotate(pd.rot);
+    ctx.scale(1, pd.ry / pd.rx);
+    const gr = ctx.createRadialGradient(0, 0, 0, 0, 0, pd.rx);
+    gr.addColorStop(0, 'rgba(9,11,15,0.5)');
+    gr.addColorStop(0.7, 'rgba(9,11,15,0.32)');
+    gr.addColorStop(1, 'rgba(9,11,15,0)');
+    ctx.fillStyle = gr;
     ctx.beginPath();
-    ctx.ellipse(pd.x, pd.y, pd.rx, pd.ry, pd.rot, 0, Math.PI * 2);
+    ctx.arc(0, 0, pd.rx, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
   }
 
   // 全体に汚れ・タイヤ痕を薄く散らす
@@ -336,8 +346,9 @@ export function paintGround(layout: CityLayout, size = 4096): GroundTextures {
   }
   for (const pd of puddles) {
     const g = rctx.createRadialGradient(pd.x * rs, pd.y * rs, 0, pd.x * rs, pd.y * rs, pd.rx * rs);
-    g.addColorStop(0, '#161616');
-    g.addColorStop(0.7, '#1c1c1c');
+    g.addColorStop(0, '#222222');
+    g.addColorStop(0.35, '#2e2e2e');
+    g.addColorStop(0.75, 'rgba(120,120,120,0.55)');
     g.addColorStop(1, 'rgba(180,180,180,0)');
     rctx.save();
     rctx.translate(pd.x * rs, pd.y * rs);
