@@ -42,7 +42,7 @@ attribute vec3 aOrigin;
 attribute vec4 aInfo;
 varying vec3 vPat;
 varying vec3 vLN;
-varying vec4 vInfo;`
+flat varying vec4 vInfo;`
       )
       .replace(
         '#include <begin_vertex>',
@@ -60,7 +60,7 @@ uniform float uLit;
 uniform float uLitGain;
 varying vec3 vPat;
 varying vec3 vLN;
-varying vec4 vInfo;
+flat varying vec4 vInfo;
 ${FACADE_GLSL}`
       )
       .replace(
@@ -120,10 +120,11 @@ float rectMask(vec2 p, vec2 lo, vec2 hi, float aa) {
 
 void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float met, out vec3 emi) {
   vec3 an = abs(ln);
-  float seed = info.x;
-  float style = info.y;
-  float kind = info.z;
-  float dmg = info.w;
+  // 属性は整数値で持ち、補間誤差でハッシュが画素ごとに変わらないよう丸める
+  float seed = floor(info.x + 0.5);
+  float style = floor(info.y + 0.5);
+  float kind = floor(info.z + 0.5);
+  float dmg = floor(info.w + 0.5);
   bool side = an.y < 0.5;
   vec2 uv = an.x > 0.5 ? vec2(p.z, p.y) : (an.z > 0.5 ? vec2(p.x, p.y) : p.xz);
   float aa = max(max(fwidth(uv.x), fwidth(uv.y)) * 0.75, 0.003);

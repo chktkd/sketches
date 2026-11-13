@@ -106,7 +106,7 @@ export class City {
       origin[id * 3] = x;
       origin[id * 3 + 1] = y;
       origin[id * 3 + 2] = z;
-      info[id * 4] = b.seed;
+      info[id * 4] = Math.floor(b.seed);
       info[id * 4 + 1] = b.style;
       info[id * 4 + 2] = this.voxels.kind[id] as number;
       info[id * 4 + 3] = 0;
@@ -304,7 +304,7 @@ export class City {
       sy: CELL,
       sz: CELL,
       origin: [x, y, z],
-      info: [b.seed, b.style, vw.kind[id] as number, 1],
+      info: [Math.floor(b.seed), b.style, vw.kind[id] as number, 1],
       color: [
         this.colors[id * 3] as number,
         this.colors[id * 3 + 1] as number,

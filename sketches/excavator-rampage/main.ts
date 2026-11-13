@@ -223,7 +223,7 @@ function boot() {
   };
   hud.bld.textContent = String(city.stats.buildings);
 
-  function frame(dt: number) {
+  function frame(dt: number, draw = true) {
     time += dt;
     // 1) 入力
     if (keys.tap('KeyT')) {
@@ -347,8 +347,10 @@ function boot() {
     }
 
     // 6) 描画
-    if (post.isEnabled) post.render(dt, time);
-    else renderer.render(scene, camera);
+    if (draw) {
+      if (post.isEnabled) post.render(dt, time);
+      else renderer.render(scene, camera);
+    }
 
     // 7) HUD と動的解像度
     frames++;
