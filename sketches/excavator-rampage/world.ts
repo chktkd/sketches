@@ -7,6 +7,7 @@ import { type CityLayout, generateCity } from './layout';
 import { Props } from './props';
 import { createRng } from './rng';
 import { VoxelWorld } from './voxel';
+import { weatherize } from './weather';
 
 export interface Quality {
   groundRes: number;
@@ -47,6 +48,21 @@ export interface WorldBox {
   half: THREE.Vector3;
 }
 
+interface RoofProp {
+  /** 載っているセル（屋根スラブ）。これが壊れたら落ちる */
+  cell: number;
+  mesh: 'box' | 'cyl';
+  idx: number;
+  x: number;
+  y: number;
+  z: number;
+  sx: number;
+  sy: number;
+  sz: number;
+  color: [number, number, number];
+  gone: boolean;
+}
+
 const v = new THREE.Vector3();
 const vel = new THREE.Vector3();
 
@@ -73,6 +89,10 @@ export class City {
   private dustBudget = 0;
   private readonly rng = createRng(9001);
   private readonly shardMat: THREE.MeshStandardMaterial;
+  private roofProps: RoofProp[] = [];
+  private roofBoxes!: THREE.InstancedMesh;
+  private roofCyls!: THREE.InstancedMesh;
+  private roofDirty = false;
 
   constructor(quality: Quality, seed?: number) {
     this.layout = generateCity(seed);
@@ -170,13 +190,15 @@ export class City {
     this.shardPool = new DebrisPool(shardMesh, this.voxels, this.rubble, impact, true);
 
     // ── 地面
-    const { map, bump } = paintGround(this.layout, quality.groundRes);
+    const { map, bump, rough } = paintGround(this.layout, quality.groundRes);
     const groundMat = new THREE.MeshStandardMaterial({
       map,
       bumpMap: bump,
-      bumpScale: 1.4,
-      roughness: 0.93,
+      bumpScale: 1.6,
+      roughnessMap: rough,
+      roughness: 1,
       metalness: 0,
+      envMapIntensity: 1.2,
     });
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_EXTENT, GROUND_EXTENT), groundMat);
     ground.rotation.x = -Math.PI / 2;
@@ -210,6 +232,7 @@ export class City {
     decalMesh.renderOrder = 1;
     this.group.add(decalMesh);
 
+    this.buildRoofProps();
     this.props = new Props(this.layout.props);
     this.group.add(this.props.group);
 
@@ -481,6 +504,7 @@ export class City {
 
     this.cellPool.update(dt);
     this.shardPool.update(dt);
+    this.updateRoofProps();
     this.props.update(dt);
     this.dust.update(dt);
     this.decals.flush(dt);
@@ -494,6 +518,157 @@ export class City {
     u.uFogColor.value.copy(fogColor);
     u.uFogDensity.value = fogDensity;
     u.uScale.value = screenScale;
+  }
+
+  /** 屋上の室外機・給水タンク・階段室・アンテナ */
+  private buildRoofProps() {
+    const r = createRng(31337);
+    type Spec = Omit<RoofProp, 'idx' | 'gone'>;
+    const specs: Spec[] = [];
+    for (let bi = 0; bi < this.layout.buildings.length; bi++) {
+      const b = this.layout.buildings[bi]!;
+      const placed: [number, number][] = [];
+      const n = 2 + Math.floor((b.w * b.d) / 30) + r.int(0, 2);
+      const top = (b.layers + 1) * CELL;
+      for (let k = 0; k < n; k++) {
+        const pick = r.next();
+        const type =
+          k === 0 && b.w >= 7 && b.d >= 6
+            ? 'bulk'
+            : pick < 0.5
+              ? 'ac'
+              : pick < 0.78
+                ? 'tank'
+                : 'mast';
+        const sx =
+          type === 'bulk'
+            ? r.range(3.2, 4.6)
+            : type === 'ac'
+              ? r.range(1.6, 2.8)
+              : type === 'tank'
+                ? r.range(2, 2.8)
+                : 0.14;
+        const sy =
+          type === 'bulk'
+            ? r.range(2.6, 3.2)
+            : type === 'ac'
+              ? r.range(1.0, 1.5)
+              : type === 'tank'
+                ? r.range(2.2, 3)
+                : r.range(5, 10);
+        const sz =
+          type === 'bulk'
+            ? r.range(3, 4.2)
+            : type === 'ac'
+              ? r.range(1.2, 2)
+              : type === 'tank'
+                ? sx
+                : 0.14;
+        for (let tries = 0; tries < 10; tries++) {
+          const gx = b.x0 + 1.3 + r.next() * Math.max(0.1, b.w - 2.6);
+          const gz = b.z0 + 1.3 + r.next() * Math.max(0.1, b.d - 2.6);
+          if (placed.some(([px, pz]) => Math.hypot(px - gx, pz - gz) < 2.6)) continue;
+          placed.push([gx, gz]);
+          const cell = this.voxels.idAt(Math.floor(gx), b.layers, Math.floor(gz));
+          if (cell < 0) break;
+          const g =
+            type === 'tank'
+              ? [0.46, 0.5, 0.48]
+              : type === 'mast'
+                ? [0.6, 0.6, 0.62]
+                : type === 'bulk'
+                  ? [b.tint[0] * 0.85, b.tint[1] * 0.85, b.tint[2] * 0.85]
+                  : [0.64 + r.next() * 0.08, 0.66 + r.next() * 0.08, 0.68 + r.next() * 0.08];
+          specs.push({
+            cell,
+            mesh: type === 'tank' || type === 'mast' ? 'cyl' : 'box',
+            x: gx * CELL - HALF,
+            y: top + sy / 2,
+            z: gz * CELL - HALF,
+            sx,
+            sy,
+            sz,
+            color: g as [number, number, number],
+          });
+          break;
+        }
+      }
+    }
+    const boxes = specs.filter((p) => p.mesh === 'box');
+    const cyls = specs.filter((p) => p.mesh === 'cyl');
+    const mat = weatherize(
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.62, metalness: 0.55 }),
+      {
+        dirt: 0.7,
+        wear: 0.3,
+        bump: 0.5,
+        rust: 0.3,
+        seed: 2.5,
+      }
+    );
+    this.roofBoxes = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      mat,
+      Math.max(1, boxes.length)
+    );
+    this.roofCyls = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.5, 0.5, 1, 20),
+      mat,
+      Math.max(1, cyls.length)
+    );
+    for (const m of [this.roofBoxes, this.roofCyls]) {
+      m.castShadow = true;
+      m.receiveShadow = true;
+      m.frustumCulled = false;
+      this.group.add(m);
+    }
+    this.roofBoxes.count = boxes.length;
+    this.roofCyls.count = cyls.length;
+    const mat4 = new THREE.Matrix4();
+    const place = (list: Spec[], mesh: THREE.InstancedMesh, kind: 'box' | 'cyl') => {
+      list.forEach((p, i) => {
+        mat4.makeScale(p.sx, p.sy, p.sz).setPosition(p.x, p.y, p.z);
+        mesh.setMatrixAt(i, mat4);
+        mesh.setColorAt(i, new THREE.Color(p.color[0], p.color[1], p.color[2]));
+        this.roofProps.push({ ...p, mesh: kind, idx: i, gone: false });
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    };
+    place(boxes, this.roofBoxes, 'box');
+    place(cyls, this.roofCyls, 'cyl');
+  }
+
+  /** 載っている屋根が壊れた設備は、破片になって落ちる */
+  private updateRoofProps() {
+    for (const p of this.roofProps) {
+      if (p.gone || this.voxels.alive[p.cell]) continue;
+      p.gone = true;
+      const mesh = p.mesh === 'box' ? this.roofBoxes : this.roofCyls;
+      (mesh.instanceMatrix.array as Float32Array).fill(0, p.idx * 16, p.idx * 16 + 16);
+      this.roofDirty = true;
+      const r = this.rng;
+      this.shardPool.spawn({
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        vx: (r.next() - 0.5) * 3,
+        vy: r.next() * 2,
+        vz: (r.next() - 0.5) * 3,
+        wx: (r.next() - 0.5) * 3,
+        wy: (r.next() - 0.5) * 3,
+        wz: (r.next() - 0.5) * 3,
+        sx: p.sx,
+        sy: Math.min(p.sy, 2.4),
+        sz: p.sz,
+        color: p.color,
+      });
+    }
+    if (this.roofDirty) {
+      this.roofBoxes.instanceMatrix.needsUpdate = true;
+      this.roofCyls.instanceMatrix.needsUpdate = true;
+      this.roofDirty = false;
+    }
   }
 
   private releaseCollapse(bi: number, ids: number[]) {

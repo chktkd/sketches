@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CELL, GRID_N, HALF } from './config';
 import { type PropSpec, isInRoadIntersection } from './layout';
@@ -32,28 +33,100 @@ function box(
   return paint(g, ...col);
 }
 
-function carGeometry(): THREE.BufferGeometry {
-  const parts: THREE.BufferGeometry[] = [];
-  parts.push(box(4.5, 0.72, 1.85, 0, 0.62, 0, [1, 1, 1]));
-  parts.push(box(1.5, 0.1, 1.7, 1.25, 1.02, 0, [1, 1, 1])); // ボンネット上面
-  parts.push(box(2.3, 0.62, 1.64, -0.25, 1.28, 0, [0.04, 0.05, 0.07])); // ガラス
-  parts.push(box(2.15, 0.07, 1.52, -0.25, 1.62, 0, [1, 1, 1])); // ルーフ
-  parts.push(box(0.1, 0.18, 1.6, 2.26, 0.7, 0, [0.9, 0.88, 0.7])); // ヘッドライト帯
-  parts.push(box(0.1, 0.16, 1.5, -2.26, 0.74, 0, [0.7, 0.05, 0.05])); // テールランプ
-  for (const [x, z] of [
-    [1.4, 0.92],
-    [1.4, -0.92],
-    [-1.4, 0.92],
-    [-1.4, -0.92],
+/** 側面図（x が前、y が上）の多角形を幅方向に押し出す */
+function extrudeSide(pts: [number, number][], width: number, bevel: number): THREE.BufferGeometry {
+  const sh = new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, y)));
+  const g = new THREE.ExtrudeGeometry(sh, {
+    depth: width - bevel * 2,
+    bevelEnabled: bevel > 0,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelSegments: 3,
+    curveSegments: 4,
+  });
+  g.translate(0, 0, -(width - bevel * 2) / 2);
+  g.deleteAttribute('uv');
+  return g.index ? g.toNonIndexed() : g;
+}
+
+/** 車: 塗装（インスタンスごとに色が変わる）と、ガラス・タイヤ・ライトなど（頂点色）に分ける */
+function carGeometries(): { body: THREE.BufferGeometry; dark: THREE.BufferGeometry } {
+  const paintParts: THREE.BufferGeometry[] = [];
+  paintParts.push(
+    extrudeSide(
+      [
+        [-2.2, 0.3],
+        [2.2, 0.3],
+        [2.32, 0.56],
+        [2.22, 0.9],
+        [1.4, 1.02],
+        [0.9, 1.05],
+        [-1.45, 1.05],
+        [-2.22, 1.0],
+        [-2.34, 0.7],
+      ],
+      1.84,
+      0.1
+    )
+  );
+  const roof = new RoundedBoxGeometry(1.5, 0.08, 1.7, 2, 0.03);
+  roof.translate(-0.3, 1.6, 0);
+  paintParts.push(roof.deleteAttribute('uv') && roof.toNonIndexed());
+  for (const [x, y, h, tilt] of [
+    [0.6, 1.32, 0.62, -0.62],
+    [-0.28, 1.32, 0.52, 0],
+    [-1.18, 1.34, 0.6, 0.62],
   ] as const) {
-    const w = new THREE.CylinderGeometry(0.37, 0.37, 0.26, 14);
-    w.rotateX(Math.PI / 2);
-    w.translate(x, 0.37, z);
-    parts.push(paint(w, 0.03, 0.03, 0.035));
+    const p = new THREE.BoxGeometry(0.1, h, 1.76);
+    p.rotateZ(tilt);
+    p.translate(x, y, 0);
+    p.deleteAttribute('uv');
+    paintParts.push(p.toNonIndexed());
   }
-  const g = mergeGeometries(parts, false);
-  g.computeBoundingSphere();
-  return g;
+  const body = mergeGeometries(paintParts, false);
+  body.computeBoundingSphere();
+
+  const dark: THREE.BufferGeometry[] = [];
+  const glass = extrudeSide(
+    [
+      [0.92, 1.05],
+      [0.36, 1.58],
+      [-1.0, 1.59],
+      [-1.46, 1.07],
+    ],
+    1.72,
+    0
+  );
+  dark.push(paint(glass, 0.025, 0.035, 0.05));
+  for (const [x, z] of [
+    [1.42, 0.92],
+    [1.42, -0.92],
+    [-1.42, 0.92],
+    [-1.42, -0.92],
+  ] as const) {
+    const arch = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 18);
+    arch.rotateX(Math.PI / 2);
+    arch.translate(x, 0.5, z * 0.97);
+    dark.push(paint(arch, 0.012, 0.012, 0.014));
+    const tire = new THREE.CylinderGeometry(0.4, 0.4, 0.28, 18);
+    tire.rotateX(Math.PI / 2);
+    tire.translate(x, 0.4, z);
+    dark.push(paint(tire, 0.035, 0.035, 0.04));
+    const rim = new THREE.CylinderGeometry(0.24, 0.24, 0.3, 10);
+    rim.rotateX(Math.PI / 2);
+    rim.translate(x, 0.4, z * 1.01);
+    dark.push(paint(rim, 0.42, 0.43, 0.45));
+  }
+  dark.push(box(0.12, 0.16, 0.5, 2.3, 0.72, 0.62, [1, 0.95, 0.78]));
+  dark.push(box(0.12, 0.16, 0.5, 2.3, 0.72, -0.62, [1, 0.95, 0.78]));
+  dark.push(box(0.1, 0.14, 0.5, -2.34, 0.8, 0.6, [0.8, 0.04, 0.04]));
+  dark.push(box(0.1, 0.14, 0.5, -2.34, 0.8, -0.6, [0.8, 0.04, 0.04]));
+  dark.push(box(0.2, 0.2, 1.7, 2.3, 0.38, 0, [0.05, 0.05, 0.055]));
+  dark.push(box(0.2, 0.2, 1.7, -2.3, 0.38, 0, [0.05, 0.05, 0.055]));
+  dark.push(box(0.04, 0.12, 0.5, 2.35, 0.55, 0, [0.7, 0.7, 0.72]));
+  const darkGeo = mergeGeometries(dark, false);
+  darkGeo.computeBoundingSphere();
+  return { body, dark: darkGeo };
 }
 
 function treeGeometry(rng: ReturnType<typeof createRng>): THREE.BufferGeometry {
@@ -151,6 +224,7 @@ export class Props {
   });
   private readonly meshes: Record<Kind, THREE.InstancedMesh>;
   private readonly lampHeads: THREE.InstancedMesh;
+  private readonly carDark: THREE.InstancedMesh;
   private readonly m = new THREE.Matrix4();
   private readonly q = new THREE.Quaternion();
   private readonly q2 = new THREE.Quaternion();
@@ -183,11 +257,19 @@ export class Props {
       });
     }
 
-    const carMat = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.32,
-      metalness: 0.65,
+    const carMat = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
+      roughness: 0.38,
+      metalness: 0.55,
+      clearcoat: 1,
+      clearcoatRoughness: 0.16,
     });
+    const carDarkMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.28,
+      metalness: 0.35,
+    });
+    const car = carGeometries();
     const treeMat = new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.92,
@@ -207,7 +289,7 @@ export class Props {
       return mesh;
     };
     this.meshes = {
-      car: mk(carGeometry(), carMat, counts.car),
+      car: mk(car.body, carMat, counts.car),
       tree: mk(treeGeometry(rng), treeMat, counts.tree),
       lamp: mk(lampPoleGeometry(), poleMat, counts.lamp),
     };
@@ -216,7 +298,9 @@ export class Props {
     this.lampHeads = new THREE.InstancedMesh(head, this.lampHeadMaterial, Math.max(1, counts.lamp));
     this.lampHeads.frustumCulled = false;
     this.group.add(this.lampHeads);
+    this.carDark = mk(car.dark, carDarkMat, counts.car);
     for (const k of ['car', 'tree', 'lamp'] as const) this.meshes[k].count = counts[k];
+    this.carDark.count = counts.car;
     this.lampHeads.count = counts.lamp;
 
     const col = new THREE.Color();
@@ -239,6 +323,7 @@ export class Props {
     for (const k of ['car', 'tree', 'lamp'] as const)
       this.meshes[k].instanceMatrix.needsUpdate = true;
     this.lampHeads.instanceMatrix.needsUpdate = true;
+    this.carDark.instanceMatrix.needsUpdate = true;
   }
 
   private compose(it: PropItem) {
@@ -270,6 +355,7 @@ export class Props {
     }
     this.m.compose(this.p, this.q, this.s);
     mesh.setMatrixAt(it.idx, this.m);
+    if (it.kind === 'car') this.carDark.setMatrixAt(it.idx, this.m);
     if (it.kind === 'lamp') this.lampHeads.setMatrixAt(it.idx, this.m);
   }
 
@@ -309,10 +395,11 @@ export class Props {
     for (const k of ['car', 'tree', 'lamp'] as const)
       this.meshes[k].instanceMatrix.needsUpdate = true;
     this.lampHeads.instanceMatrix.needsUpdate = true;
+    this.carDark.instanceMatrix.needsUpdate = true;
   }
 
   /** 街灯の点灯具合（時間帯） */
   setLampLevel(level: number) {
-    this.lampHeadMaterial.emissiveIntensity = level * 3.5;
+    this.lampHeadMaterial.emissiveIntensity = level * 2.2;
   }
 }

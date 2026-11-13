@@ -75,7 +75,7 @@ function boot() {
   ex.z = HALF - 40;
   ex.heading = Math.PI / 2;
 
-  const post = new PostFX(renderer, scene, camera);
+  const post = new PostFX(renderer, scene, camera, [city.dust.points]);
   const rig = new CameraRig(camera);
   rig.yaw = Math.PI / 2 + 0.75;
   rig.dist = 84;
@@ -91,6 +91,7 @@ function boot() {
     const t = TIMES[timeIdx]!;
     env.setTime(t);
     post.setBloom(env.bloom.strength, env.bloom.radius, env.bloom.threshold);
+    post.setGrade(env.grade);
     ex.setLights(env.lamps);
     city.props.setLampLevel(env.lamps);
     $('time-label').textContent = TIME_LABEL[t];
@@ -328,6 +329,7 @@ function boot() {
 
     focus.set(ex.x, 7 * MACHINE_SCALE, ex.z);
     rig.update(dt, focus);
+    env.update(time);
     env.followShadow(tmp.set(ex.x, 0, ex.z));
 
     // 照準の表示（30Hz）
@@ -415,6 +417,7 @@ function boot() {
       rig,
       env,
       auto,
+      post,
       camera,
       setTime: (i: number) => {
         timeIdx = i;

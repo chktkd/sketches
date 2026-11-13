@@ -29,6 +29,7 @@ function speckle(
 export interface GroundTextures {
   map: THREE.CanvasTexture;
   bump: THREE.CanvasTexture;
+  rough: THREE.CanvasTexture;
 }
 
 /** 道路・歩道・区画の舗装を描いた地面のベース画像 */
@@ -214,6 +215,92 @@ export function paintGround(layout: CityLayout, size = 4096): GroundTextures {
     }
   }
 
+  // 路面の経年変化: 補修跡・ひび割れ・マンホール・油染み
+  const roadRects: { x: number; y: number; w: number; h: number }[] = [];
+  for (let i = 0; i <= BLOCKS; i++) {
+    const m0 = cellM(i * PITCH);
+    roadRects.push({ x: X(m0), y: X(-GROUND_EXTENT / 2), w: roadW * ppm, h: size });
+    roadRects.push({ x: X(-GROUND_EXTENT / 2), y: X(m0), w: size, h: roadW * ppm });
+  }
+  const onRoad = () => {
+    const r = roadRects[Math.floor(rand.next() * roadRects.length)]!;
+    return { x: r.x + rand.next() * r.w, y: r.y + rand.next() * r.h };
+  };
+  // 補修跡（少し色味の違う四角）
+  for (let i = 0; i < 160; i++) {
+    const p = onRoad();
+    const w = rand.range(2, 9) * ppm;
+    const h = rand.range(1.5, 6) * ppm;
+    ctx.fillStyle = `rgba(${rand.int(20, 52)},${rand.int(20, 50)},${rand.int(22, 52)},${rand.range(0.25, 0.55)})`;
+    ctx.fillRect(p.x, p.y, w, h);
+  }
+  // ひび割れ
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 420; i++) {
+    const p = onRoad();
+    ctx.strokeStyle = `rgba(8,8,10,${rand.range(0.35, 0.7)})`;
+    ctx.lineWidth = rand.range(0.5, 1.6);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    let x = p.x;
+    let y = p.y;
+    let a = rand.next() * 6.28;
+    for (let k = 0; k < rand.int(4, 12); k++) {
+      a += rand.range(-0.8, 0.8);
+      x += Math.cos(a) * rand.range(3, 12);
+      y += Math.sin(a) * rand.range(3, 12);
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // 油染み
+  for (let i = 0; i < 130; i++) {
+    const p = onRoad();
+    const r = rand.range(0.5, 1.6) * ppm * 2;
+    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+    g.addColorStop(0, 'rgba(5,6,10,0.55)');
+    g.addColorStop(1, 'rgba(5,6,10,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+  }
+  // マンホール
+  for (let i = 0; i < 90; i++) {
+    const p = onRoad();
+    const r = 0.55 * ppm;
+    ctx.fillStyle = 'rgba(52,50,48,0.95)';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(20,20,20,0.9)';
+    ctx.lineWidth = Math.max(1, r * 0.18);
+    ctx.stroke();
+    ctx.lineWidth = 0.6;
+    for (let k = -2; k <= 2; k++) {
+      ctx.beginPath();
+      ctx.moveTo(p.x - r * 0.7, p.y + k * r * 0.28);
+      ctx.lineTo(p.x + r * 0.7, p.y + k * r * 0.28);
+      ctx.stroke();
+    }
+  }
+
+  // 水たまり: 色（暗く）と粗さ（鏡面）の両方に描く。夕景・夜に空やビルの灯りが映り込む
+  const puddles: { x: number; y: number; rx: number; ry: number; rot: number }[] = [];
+  for (let i = 0; i < 240; i++) {
+    const p = onRoad();
+    puddles.push({
+      ...p,
+      rx: rand.range(1.2, 5.5) * ppm,
+      ry: rand.range(0.8, 2.6) * ppm,
+      rot: rand.next() * 3.14,
+    });
+  }
+  for (const pd of puddles) {
+    ctx.fillStyle = 'rgba(9,11,15,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(pd.x, pd.y, pd.rx, pd.ry, pd.rot, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // 全体に汚れ・タイヤ痕を薄く散らす
   speckle(ctx, 0, 0, size, size, 220000, false);
   speckle(ctx, 0, 0, size, size, 120000, true);
@@ -232,6 +319,39 @@ export function paintGround(layout: CityLayout, size = 4096): GroundTextures {
     );
     ctx.fill();
   }
+
+  // 粗さマップ（G チャンネルを使う）: 道路は少し滑らか、歩道は粗い、水たまりは鏡面
+  const rc = document.createElement('canvas');
+  rc.width = rc.height = Math.min(size, 2048);
+  const rctx = rc.getContext('2d')!;
+  const rs = rc.width / size;
+  rctx.fillStyle = '#d6d6d6';
+  rctx.fillRect(0, 0, rc.width, rc.height);
+  rctx.fillStyle = '#b4b4b4';
+  for (const r of roadRects) rctx.fillRect(r.x * rs, r.y * rs, r.w * rs, r.h * rs);
+  for (let i = 0; i < 80000; i++) {
+    const v = rand.int(150, 235);
+    rctx.fillStyle = `rgba(${v},${v},${v},0.5)`;
+    rctx.fillRect(rand.next() * rc.width, rand.next() * rc.height, 2, 2);
+  }
+  for (const pd of puddles) {
+    const g = rctx.createRadialGradient(pd.x * rs, pd.y * rs, 0, pd.x * rs, pd.y * rs, pd.rx * rs);
+    g.addColorStop(0, '#161616');
+    g.addColorStop(0.7, '#1c1c1c');
+    g.addColorStop(1, 'rgba(180,180,180,0)');
+    rctx.save();
+    rctx.translate(pd.x * rs, pd.y * rs);
+    rctx.rotate(pd.rot);
+    rctx.scale(1, pd.ry / pd.rx);
+    rctx.translate(-pd.x * rs, -pd.y * rs);
+    rctx.fillStyle = g;
+    rctx.beginPath();
+    rctx.arc(pd.x * rs, pd.y * rs, pd.rx * rs, 0, Math.PI * 2);
+    rctx.fill();
+    rctx.restore();
+  }
+  const rough = new THREE.CanvasTexture(rc);
+  rough.anisotropy = 8;
 
   const map = new THREE.CanvasTexture(c);
   map.colorSpace = THREE.SRGBColorSpace;
@@ -257,7 +377,7 @@ export function paintGround(layout: CityLayout, size = 4096): GroundTextures {
   bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
   bump.repeat.set(GROUND_EXTENT / 5, GROUND_EXTENT / 5);
   bump.anisotropy = 8;
-  return { map, bump };
+  return { map, bump, rough };
 }
 
 /**

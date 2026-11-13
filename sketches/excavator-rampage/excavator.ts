@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { weatherize } from './weather';
 import type { WorldBox } from './world';
 import {
   BOOM_FOOT,
@@ -52,11 +53,11 @@ function makeMaterials() {
   const pad = new THREE.MeshStandardMaterial({ color: 0x2b2d30, roughness: 0.6, metalness: 0.8 });
   const glass = new THREE.MeshPhysicalMaterial({
     color: 0x1b2e38,
-    roughness: 0.03,
+    roughness: 0.14,
     metalness: 0.2,
     transparent: true,
-    opacity: 0.38,
-    envMapIntensity: 1.8,
+    opacity: 0.55,
+    envMapIntensity: 2.2,
     clearcoat: 1,
   });
   const lamp = new THREE.MeshStandardMaterial({
@@ -66,7 +67,52 @@ function makeMaterials() {
     roughness: 0.2,
   });
   const seat = new THREE.MeshStandardMaterial({ color: 0x1a1c1f, roughness: 0.85 });
-  return { paint, paintWorn, dark, darkPaint, steel, bucketSteel, rubber, pad, glass, lamp, seat };
+  weatherize(paint, { dirt: 0.7, wear: 0.38, bump: 1, seed: 1.3 });
+  weatherize(paintWorn, { dirt: 0.9, wear: 0.5, bump: 1, seed: 7.1 });
+  weatherize(dark, { dirt: 0.7, wear: 0.4, bump: 0.6, rust: 0.2, seed: 3.7 });
+  weatherize(darkPaint, { dirt: 0.8, wear: 0.4, bump: 0.8, rust: 0.1, seed: 9.2 });
+  weatherize(steel, { dirt: 0.35, wear: 0.25, bump: 0.3, seed: 5.5 });
+  weatherize(bucketSteel, { dirt: 0.75, wear: 1.0, bump: 1.4, rust: 0.55, seed: 11.4 });
+  weatherize(rubber, { dirt: 0.9, wear: 0, bump: 1.2, seed: 2.2 });
+  weatherize(pad, { dirt: 0.9, wear: 0.4, bump: 1.0, rust: 0.4, seed: 4.8 });
+  const beadMat = new THREE.MeshStandardMaterial({
+    color: 0x3a3730,
+    roughness: 0.7,
+    metalness: 0.8,
+  });
+  const hose = new THREE.MeshStandardMaterial({
+    color: 0x0b0b0c,
+    roughness: 0.55,
+    metalness: 0.05,
+  });
+  const hoseClamp = new THREE.MeshStandardMaterial({
+    color: 0x8a8f96,
+    roughness: 0.4,
+    metalness: 0.9,
+  });
+  const amber = new THREE.MeshStandardMaterial({
+    color: 0xff9a1a,
+    emissive: 0xff7a00,
+    emissiveIntensity: 1.5,
+    roughness: 0.3,
+  });
+  return {
+    paint,
+    paintWorn,
+    dark,
+    darkPaint,
+    steel,
+    bucketSteel,
+    rubber,
+    pad,
+    glass,
+    lamp,
+    seat,
+    beadMat,
+    hose,
+    hoseClamp,
+    amber,
+  };
 }
 type Mats = ReturnType<typeof makeMaterials>;
 
@@ -96,11 +142,7 @@ function zcyl(r: number, len: number, seg = 24) {
   return g;
 }
 
-function smoothShape(
-  top: [number, number][],
-  bottom: [number, number][],
-  samples = 26
-): THREE.Shape {
+function smoothContours(top: [number, number][], bottom: [number, number][], samples = 26) {
   const t = new THREE.SplineCurve(top.map(([x, y]) => new THREE.Vector2(x, y))).getPoints(samples);
   const b = new THREE.SplineCurve(bottom.map(([x, y]) => new THREE.Vector2(x, y))).getPoints(
     samples
@@ -110,7 +152,60 @@ function smoothShape(
   for (const p of t.slice(1)) s.lineTo(p.x, p.y);
   for (const p of b) s.lineTo(p.x, p.y);
   s.closePath();
-  return s;
+  return { shape: s, top: t, bottom: b };
+}
+
+function smoothShape(
+  top: [number, number][],
+  bottom: [number, number][],
+  samples = 26
+): THREE.Shape {
+  return smoothContours(top, bottom, samples).shape;
+}
+
+/** 板の縁に沿った溶接ビード（細い管）を両面に付ける */
+function weldBeads(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  pts: THREE.Vector2[],
+  inset: number,
+  zSide: number,
+  dir: 1 | -1
+) {
+  const path = pts
+    .filter((_, i) => i % 2 === 0)
+    .map((p) => new THREE.Vector3(p.x, p.y + dir * -inset, 0));
+  for (const s of [-1, 1]) {
+    const tube = new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3(path),
+      path.length * 3,
+      0.05,
+      6,
+      false
+    );
+    const m = add(parent, tube, mat, 0, 0, s * zSide);
+    m.castShadow = false;
+  }
+}
+
+/** ホース（黒いゴム管）とクランプ */
+function hoseRun(parent: THREE.Object3D, m: Mats, pts: [number, number][], z: number, r = 0.13) {
+  const curve = new THREE.CatmullRomCurve3(pts.map(([x, y]) => new THREE.Vector3(x, y, z)));
+  add(parent, new THREE.TubeGeometry(curve, 40, r, 8, false), m.hose);
+  const n = Math.max(2, Math.floor(curve.getLength() / 2.6));
+  for (let i = 1; i < n; i++) {
+    const p = curve.getPoint(i / n);
+    const tg = curve.getTangent(i / n);
+    const c = add(
+      parent,
+      new RoundedBoxGeometry(0.28, 0.36, 0.34, 2, 0.06),
+      m.hoseClamp,
+      p.x,
+      p.y,
+      p.z
+    );
+    c.rotation.z = Math.atan2(tg.y, tg.x);
+  }
 }
 
 function extrude(shape: THREE.Shape, depth: number, bevel = 0.14): THREE.ExtrudeGeometry {
@@ -547,6 +642,33 @@ export class Excavator {
     rail.rotateZ(Math.PI / 2);
     add(h, rail, m.steel, 1.2, 2.3, 4.95);
 
+    // 機械室のパネル継ぎ目・取っ手・給油口
+    for (const x of [-5.0, -3.0, -1.1])
+      add(h, new THREE.BoxGeometry(0.05, 3.3, 0.04), m.dark, x, 2.85, 4.82);
+    add(h, new THREE.BoxGeometry(5.9, 0.05, 0.04), m.dark, -3.2, 2.2, 4.82);
+    for (const x of [-4.0, -2.0]) add(h, rbox(0.5, 0.12, 0.14, 0.04), m.steel, x, 3.6, 4.9);
+    add(h, new THREE.CylinderGeometry(0.34, 0.34, 0.16, 18), m.steel, -1.6, 4.85, 3.6);
+    // カウンターウェイトのボルトと吊り環
+    for (let i = 0; i < 8; i++) {
+      const bx = new THREE.CylinderGeometry(0.1, 0.1, 0.1, 6);
+      bx.rotateZ(Math.PI / 2);
+      add(h, bx, m.steel, -8.97, 1.2 + (i % 2) * 3.2, -3.6 + Math.floor(i / 2) * 2.4);
+    }
+    add(h, new THREE.TorusGeometry(0.45, 0.1, 8, 20), m.steel, -7.2, 5.45, 0);
+    // 運転台へ上がるステップと手すり
+    for (const [x, y] of [
+      [0.4, 0.15],
+      [0.4, -0.55],
+    ] as const) {
+      add(h, rbox(1.5, 0.14, 0.9, 0.05), m.dark, x, y, -5.3);
+    }
+    for (const x of [-0.2, 1.0])
+      add(h, new THREE.CylinderGeometry(0.06, 0.06, 1.6, 8), m.steel, x, 1.7, -5.15);
+    // サイドミラーと黄色い回転灯
+    add(h, new THREE.CylinderGeometry(0.04, 0.04, 1.0, 6), m.dark, 3.9, 4.9, -5.0).rotation.x =
+      Math.PI / 2;
+    add(h, rbox(0.1, 0.7, 0.45, 0.04), m.dark, 3.9, 5.0, -5.55);
+    add(h, new THREE.CylinderGeometry(0.28, 0.32, 0.4, 14), m.amber, 1.2, 6.0, -2.85);
     // 運転席
     const cab = new THREE.Group();
     cab.position.set(1.4, 0, -2.85);
@@ -607,7 +729,7 @@ export class Excavator {
     const g = this.boomGroup;
     g.position.set(BOOM_FOOT.x, BOOM_FOOT.y, 0);
     this.swingGroup.add(g);
-    const shape = smoothShape(
+    const boom = smoothContours(
       [
         [-0.7, 1.3],
         [3.0, 2.8],
@@ -625,7 +747,24 @@ export class Excavator {
         [-0.7, -1.25],
       ]
     );
-    add(g, extrude(shape, 1.7, 0.16), m.paint);
+    add(g, extrude(boom.shape, 1.7, 0.16), m.paint);
+    weldBeads(g, m.beadMat, boom.top, 0.42, 1.0, 1);
+    weldBeads(g, m.beadMat, boom.bottom, 0.42, 1.0, -1);
+    // 油圧ホースがブームの背を這う
+    for (const z of [-0.45, 0.45]) {
+      hoseRun(
+        g,
+        m,
+        [
+          [0.2, 1.75],
+          [3.2, 3.25],
+          [7, 4.35],
+          [11, 4.2],
+          [13.2, 3.6],
+        ],
+        z
+      );
+    }
     // 先端・根元のピン
     add(g, zcyl(0.62, 2.4), m.steel, L_BOOM, 0, 0);
     add(g, zcyl(0.7, 2.4), m.steel, 0, 0, 0);
@@ -653,7 +792,7 @@ export class Excavator {
     const g = this.stickGroup;
     g.position.set(L_BOOM, 0, 0);
     this.boomGroup.add(g);
-    const shape = smoothShape(
+    const stick = smoothContours(
       [
         [-1.3, 0.95],
         [1.5, 1.7],
@@ -669,7 +808,21 @@ export class Excavator {
         [-1.3, -0.95],
       ]
     );
-    add(g, extrude(shape, 1.25, 0.14), m.paint);
+    add(g, extrude(stick.shape, 1.25, 0.14), m.paint);
+    weldBeads(g, m.beadMat, stick.top, 0.3, 0.77, 1);
+    weldBeads(g, m.beadMat, stick.bottom, 0.3, 0.77, -1);
+    for (const z of [-0.4, 0.4])
+      hoseRun(
+        g,
+        m,
+        [
+          [0.8, 2.0],
+          [5, 1.75],
+          [10, 1.2],
+        ],
+        z,
+        0.11
+      );
     add(g, zcyl(0.55, 2.0), m.steel, L_STICK, 0, 0);
     add(g, zcyl(0.6, 2.4), m.steel, 0, 0, 0);
     add(g, rbox(0.9, 0.8, 1.7, 0.15), m.darkPaint, 0.3, 1.85, 0);
@@ -1053,8 +1206,8 @@ export class Excavator {
 
   /** ヘッドライトの強さ（時間帯） */
   setLights(level: number) {
-    for (const s of this.headlights) s.intensity = level * 2400;
-    this.mats.lamp.emissiveIntensity = 0.7 + level * 4;
+    for (const s of this.headlights) s.intensity = level * 320;
+    this.mats.lamp.emissiveIntensity = 0.7 + level * 1.6;
   }
 
   /** 全ジョイントを指定角へ向かわせる（クリック粉砕などの自動動作用） */

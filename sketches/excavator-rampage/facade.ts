@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CELL } from './config';
+import { BUMP_GLSL, NOISE_GLSL } from './glsl';
 
 export interface FacadeUniforms {
   /** 点灯している窓の割合 0..1 */
@@ -61,6 +62,8 @@ uniform float uLitGain;
 varying vec3 vPat;
 varying vec3 vLN;
 flat varying vec4 vInfo;
+${NOISE_GLSL}
+${BUMP_GLSL}
 ${FACADE_GLSL}`
       )
       .replace(
@@ -68,10 +71,11 @@ ${FACADE_GLSL}`
         `#include <color_fragment>
 float fRough = 0.85;
 float fMetal = 0.0;
+float fH = 0.0;
 vec3 fEmit = vec3(0.0);
 {
   vec3 fAlb;
-  facade(vPat, vLN, vInfo, fAlb, fRough, fMetal, fEmit);
+  facade(vPat, vLN, vInfo, fAlb, fRough, fMetal, fEmit, fH);
   diffuseColor.rgb *= fAlb;
 }`
       )
@@ -86,39 +90,22 @@ roughnessFactor = fRough;`
 metalnessFactor = fMetal;`
       )
       .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+normal = bumpNormal(-vViewPosition, normal, fH, faceDirection);`
+      )
+      .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
 totalEmissiveRadiance += fEmit;`
       );
   };
-  material.customProgramCacheKey = () => 'facade-v1';
+  material.customProgramCacheKey = () => 'facade-v2';
   return { material, uniforms };
 }
 
 const FACADE_GLSL = /* glsl */ `
-float h21(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-float vnoise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x),
-             mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
-}
-float fbm2(vec2 p) {
-  return vnoise(p) * 0.5 + vnoise(p * 2.07 + 17.3) * 0.3 + vnoise(p * 4.31 + 5.1) * 0.2;
-}
-// [lo, hi] の矩形マスク。aa は画素に合わせた境界のぼかし幅
-float rectMask(vec2 p, vec2 lo, vec2 hi, float aa) {
-  vec2 a = smoothstep(lo - aa, lo + aa, p);
-  vec2 b = 1.0 - smoothstep(hi - aa, hi + aa, p);
-  return a.x * a.y * b.x * b.y;
-}
-
-void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float met, out vec3 emi) {
+void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float met, out vec3 emi, out float hgt) {
   vec3 an = abs(ln);
   // 属性は整数値で持ち、補間誤差でハッシュが画素ごとに変わらないよう丸める
   float seed = floor(info.x + 0.5);
@@ -136,6 +123,7 @@ void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float m
   rou = 0.9;
   met = 0.0;
   emi = vec3(0.0);
+  hgt = 0.02 * n1 + 0.006 * n2;
 
   if (kind > 0.5 || !side) {
     // 床スラブ・屋根・上面: 無塗装コンクリート。屋根の上面は防水シート風に暗く
@@ -151,6 +139,7 @@ void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float m
     vec3 wall = concrete;
     float litRoll = 1.0;
     float litTone = h21(vec2(fi * 3.1, seed));
+    float mortarH = 0.0;
 
     if (style < 0.5) {
       // カーテンウォール: 1.5m ピッチの縦框、階ごとにスパンドレル
@@ -198,6 +187,7 @@ void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float m
       float fade = smoothstep(0.02, 0.07, max(fwidth(uv.x), fwidth(uv.y)));
       vec3 brick = vec3(1.0) * tone;
       vec3 mort = vec3(0.72, 0.7, 0.66);
+      mortarH = mortar * (1.0 - fade);
       wall = mix(mix(brick, mort, mortar), vec3(0.88), fade);
       wall *= 0.9 + 0.2 * n1;
       float win = rectMask(vec2(fu, fy), vec2(0.62, 0.8), vec2(1.78, 2.5), aa);
@@ -228,6 +218,29 @@ void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float m
       alb = mix(alb, vec3(0.1, 0.1, 0.11), frame);
     }
 
+    vec3 signEmi = vec3(0.0);
+    if (fi < 0.5 && style < 1.5 || (fi < 0.5 && style > 2.5)) {
+      // 1 階は店舗: 大きなガラス面・柱・看板帯・石の巾木
+      float sb = 3.0;
+      float sbay = floor(uv.x / sb);
+      float su = uv.x - sbay * sb;
+      float shop = rectMask(vec2(su, fy), vec2(0.16, 0.45), vec2(sb - 0.16, 2.6), aa);
+      float mu = fract(uv.x / 1.5) * 1.5;
+      float mullS = 1.0 - rectMask(vec2(mu, 1.0), vec2(0.045, 0.0), vec2(1.455, 2.0), aa);
+      glass = shop * (1.0 - mullS);
+      frame = shop * mullS;
+      float signBand = rectMask(vec2(1.0, fy), vec2(0.0, 2.66), vec2(2.0, 2.96), aa);
+      float plinth = 1.0 - smoothstep(0.4, 0.46, fy);
+      vec3 sc = 0.5 + 0.5 * cos(6.2831 * (h21(vec2(sbay, seed)) + vec3(0.0, 0.33, 0.67)));
+      wall = mix(concrete * 0.8, vec3(0.2, 0.19, 0.18) * (0.8 + 0.4 * n1), plinth);
+      alb = mix(wall, vec3(0.025, 0.04, 0.055), glass);
+      alb = mix(alb, vec3(0.1, 0.1, 0.11), frame);
+      alb = mix(alb, sc * 0.55, signBand);
+      litRoll = h21(vec2(sbay, 3.0 + seed)) * 0.7;
+      float night = smoothstep(0.08, 0.3, uLit);
+      signEmi = sc * signBand * uLitGain * (0.25 + 0.9 * night);
+    }
+
     // 汚れ: 窓の下の雨だれと、足元の黒ずみ
     float streak = fbm2(vec2(uv.x * 2.6 + seed, uv.y * 0.22));
     alb *= 1.0 - 0.3 * smoothstep(0.55, 0.9, streak) * (1.0 - glass);
@@ -236,13 +249,17 @@ void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float m
     float lit = step(litRoll, uLit * (0.6 + 0.8 * litTone)) * glass;
     vec3 warm = mix(vec3(1.0, 0.72, 0.4), vec3(0.75, 0.88, 1.0), step(0.72, h21(vec2(litRoll * 91.0, fi))));
     float room = 0.55 + 0.45 * h21(vec2(floor(uv.x * 2.0), fi + seed));
-    emi = warm * lit * uLitGain * room;
+    float blinds = 0.82 + 0.18 * step(0.5, fract(uv.y * 5.0));
+    float ceil_ = 0.65 + 0.5 * smoothstep(0.0, 2.8, fy);
+    emi = warm * lit * uLitGain * room * blinds * ceil_ + signEmi;
 
     float sheen = clamp(glass, 0.0, 1.0);
-    rou = mix(0.86, style < 0.5 ? 0.06 : 0.1, sheen);
+    rou = mix(0.86, style < 0.5 ? 0.17 : 0.2, sheen);
     met = mix(0.0, style < 0.5 ? 0.9 : 0.75, sheen);
     rou = mix(rou, 0.45, clamp(frame, 0.0, 1.0) * (1.0 - sheen));
 
+    hgt += -0.1 * clamp(glass, 0.0, 1.0) + 0.03 * clamp(frame, 0.0, 1.0);
+    if (style > 1.5 && style < 2.5) hgt -= 0.02 * mortarH;
     // 遠くでは窓の細かい模様が 1 画素より小さくなってちらつくので、平均した見た目へ寄せる
     float px = max(fwidth(uv.x), fwidth(uv.y));
     float lod = smoothstep(0.07, 0.5, px);

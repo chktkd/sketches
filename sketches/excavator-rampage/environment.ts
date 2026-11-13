@@ -31,6 +31,10 @@ interface Preset {
   /** ヘッドライト・街灯の強さの係数 */
   lamps: number;
   hemi: { sky: number; ground: number; intensity: number };
+  /** 雲量 0..1 */
+  cloud: number;
+  /** 最終パスの色調（コントラスト・彩度・色かぶり） */
+  grade: { contrast: number; saturation: number; tint: [number, number, number] };
 }
 
 const PRESETS: Record<TimeOfDay, Preset> = {
@@ -38,21 +42,23 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     elev: 46,
     az: 130,
     sunColor: 0xfff1de,
-    sunIntensity: 3.4,
+    sunIntensity: 2.5,
     turbidity: 3.2,
     rayleigh: 1.1,
     mie: 0.004,
     mieG: 0.8,
     envIntensity: 0.85,
-    exposure: 0.62,
+    exposure: 0.5,
     fogColor: 0xb7c7d6,
     fogDensity: 0.0021,
     lit: 0.05,
     litGain: 1.2,
-    bloom: { strength: 0.12, radius: 0.5, threshold: 1.0 },
+    bloom: { strength: 0.1, radius: 0.5, threshold: 1.7 },
     stars: 0,
     lamps: 0,
     hemi: { sky: 0xbfd9ff, ground: 0x6a6258, intensity: 0.25 },
+    cloud: 0.46,
+    grade: { contrast: 1.04, saturation: 1.06, tint: [1.0, 1.0, 1.0] },
   },
   dusk: {
     elev: 5.5,
@@ -69,10 +75,12 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     fogDensity: 0.0028,
     lit: 0.34,
     litGain: 2.0,
-    bloom: { strength: 0.18, radius: 0.55, threshold: 1.05 },
+    bloom: { strength: 0.2, radius: 0.5, threshold: 1.25 },
     stars: 0,
     lamps: 0.7,
     hemi: { sky: 0xffc9a0, ground: 0x3a3340, intensity: 0.2 },
+    cloud: 0.5,
+    grade: { contrast: 1.1, saturation: 1.12, tint: [1.05, 1.0, 0.93] },
   },
   night: {
     elev: -8,
@@ -89,10 +97,12 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     fogDensity: 0.0032,
     lit: 0.72,
     litGain: 3.0,
-    bloom: { strength: 0.62, radius: 0.8, threshold: 0.7 },
+    bloom: { strength: 0.3, radius: 0.6, threshold: 1.6 },
     stars: 1,
     lamps: 1.6,
-    hemi: { sky: 0x4a5f9a, ground: 0x1a1a24, intensity: 0.35 },
+    hemi: { sky: 0x5a70b0, ground: 0x23232e, intensity: 0.9 },
+    cloud: 0.46,
+    grade: { contrast: 1.1, saturation: 0.95, tint: [0.92, 0.97, 1.07] },
   },
 };
 
@@ -105,6 +115,7 @@ export class Environment {
   /** ヘッドライト・街灯の係数（時間帯で変わる） */
   lamps = 0;
   bloom = { strength: 0.2, radius: 0.5, threshold: 0.9 };
+  grade: Preset['grade'] = { contrast: 1, saturation: 1, tint: [1, 1, 1] };
   time: TimeOfDay = 'dusk';
   private readonly sky = new Sky();
   private readonly envSky = new Sky();
@@ -120,6 +131,18 @@ export class Environment {
     private readonly facade: FacadeUniforms
   ) {
     scene.fog = this.fog;
+    // 太陽付近の空は HDR で非常に明るく、ブルームが画面全体に広がる。見える空だけ上限をかける
+    const clampSky = (sky: Sky, max: number) => {
+      sky.material.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          'gl_FragColor = vec4( texColor, 1.0 );',
+          `gl_FragColor = vec4( min( texColor, vec3( ${max.toFixed(2)} ) ), 1.0 );`
+        );
+      };
+      sky.material.customProgramCacheKey = () => `sky-clamp-${max}`;
+    };
+    clampSky(this.sky, 1.1);
+    clampSky(this.envSky, 8);
     this.sky.scale.setScalar(450000);
     this.envSky.scale.setScalar(450000);
     scene.add(this.sky);
@@ -189,6 +212,11 @@ export class Environment {
       u.mieDirectionalG!.value = p.mieG;
       // 夜は月の位置に光の源を置く（空は暗いまま）
       u.sunPosition!.value.copy(this.sunDir);
+      // 太陽円盤は HDR で極端に明るく、ブルームが画面全体に広がるので抑える
+      u.showSunDisc!.value = 0;
+      u.cloudCoverage!.value = p.cloud;
+      u.cloudDensity!.value = 0.55;
+      u.cloudElevation!.value = 0.55;
     }
     if (t === 'night') {
       // 月: 太陽が地平線の下でも、月の向きから光を当てる
@@ -211,6 +239,7 @@ export class Environment {
     this.facade.uLitGain.value = p.litGain;
     this.bloom = { ...p.bloom };
     this.lamps = p.lamps;
+    this.grade = p.grade;
     (this.stars.material as THREE.PointsMaterial).opacity = p.stars;
 
     this.envRT?.dispose();
@@ -237,6 +266,11 @@ export class Environment {
       .addScaledVector(up, Math.round(py / texel) * texel - py);
     this.sun.target.position.copy(snapped);
     this.sun.position.copy(snapped).addScaledVector(L, 260);
+  }
+
+  update(time: number) {
+    this.sky.material.uniforms.time!.value = time;
+    this.envSky.material.uniforms.time!.value = time;
   }
 
   get sunDirection(): THREE.Vector3 {
