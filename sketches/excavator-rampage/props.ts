@@ -4,6 +4,7 @@ import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferG
 import { CELL, GRID_N, HALF } from './config';
 import { type PropSpec, isInRoadIntersection } from './layout';
 import { createRng } from './rng';
+import { swayify } from './wind';
 
 function paint(g: THREE.BufferGeometry, r: number, gr: number, b: number): THREE.BufferGeometry {
   const geo = g.index ? g.toNonIndexed() : g;
@@ -270,11 +271,10 @@ export class Props {
       metalness: 0.35,
     });
     const car = carGeometries();
-    const treeMat = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.92,
-      metalness: 0,
-    });
+    const treeMat = swayify(
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 }),
+      0.06
+    );
     const poleMat = new THREE.MeshStandardMaterial({
       color: 0x3b4046,
       roughness: 0.55,

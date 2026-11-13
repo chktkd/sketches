@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { Celestial } from './celestial';
 import type { FacadeUniforms } from './facade';
+import { Skyline } from './skyline';
 
 export type TimeOfDay = 'day' | 'dusk' | 'night';
 export const TIMES: TimeOfDay[] = ['dusk', 'day', 'night'];
@@ -21,7 +23,12 @@ interface Preset {
   envIntensity: number;
   exposure: number;
   fogColor: number;
-  fogDensity: number;
+  /** 線形フォグの開始・終了距離。遠景の山や街を霞ませつつ消さない */
+  fogNear: number;
+  fogFar: number;
+  /** 遠景スカイラインの影絵の色と窓明かり */
+  skylineTint: number;
+  skylineLit: number;
   /** ビル窓の点灯率と発光 */
   lit: number;
   litGain: number;
@@ -48,9 +55,12 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     mie: 0.004,
     mieG: 0.8,
     envIntensity: 0.85,
-    exposure: 0.5,
-    fogColor: 0xb7c7d6,
-    fogDensity: 0.0021,
+    exposure: 0.46,
+    fogColor: 0xb4c6d8,
+    fogNear: 140,
+    fogFar: 5600,
+    skylineTint: 0x9fb2c8,
+    skylineLit: 0.03,
     lit: 0.05,
     litGain: 1.2,
     bloom: { strength: 0.1, radius: 0.5, threshold: 1.7 },
@@ -62,7 +72,7 @@ const PRESETS: Record<TimeOfDay, Preset> = {
   },
   dusk: {
     elev: 5.5,
-    az: 246,
+    az: 320,
     sunColor: 0xffa860,
     sunIntensity: 4.6,
     turbidity: 6.5,
@@ -71,8 +81,11 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     mieG: 0.86,
     envIntensity: 0.95,
     exposure: 0.55,
-    fogColor: 0xd29a78,
-    fogDensity: 0.0028,
+    fogColor: 0xd4a07e,
+    fogNear: 70,
+    fogFar: 3400,
+    skylineTint: 0x9a6e64,
+    skylineLit: 0.6,
     lit: 0.34,
     litGain: 2.0,
     bloom: { strength: 0.2, radius: 0.5, threshold: 1.25 },
@@ -94,7 +107,10 @@ const PRESETS: Record<TimeOfDay, Preset> = {
     envIntensity: 0.9,
     exposure: 1.0,
     fogColor: 0x0b1224,
-    fogDensity: 0.0032,
+    fogNear: 90,
+    fogFar: 2800,
+    skylineTint: 0x0d1424,
+    skylineLit: 1,
     lit: 0.72,
     litGain: 3.0,
     bloom: { strength: 0.3, radius: 0.6, threshold: 1.6 },
@@ -111,7 +127,9 @@ const SHADOW_EXTENT = 95;
 export class Environment {
   readonly sun = new THREE.DirectionalLight(0xffffff, 1);
   readonly hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.2);
-  readonly fog = new THREE.FogExp2(0xb7c7d6, 0.002);
+  readonly fog = new THREE.Fog(0xb4c6d8, 100, 4000);
+  readonly skyline = new Skyline();
+  readonly celestial = new Celestial();
   /** ヘッドライト・街灯の係数（時間帯で変わる） */
   lamps = 0;
   bloom = { strength: 0.2, radius: 0.5, threshold: 0.9 };
@@ -122,7 +140,8 @@ export class Environment {
   private readonly envScene = new THREE.Scene();
   private readonly pmrem: THREE.PMREMGenerator;
   private envRT: THREE.WebGLRenderTarget | null = null;
-  private readonly stars: THREE.Points;
+  readonly stars: THREE.Points;
+  private readonly trueSun = new THREE.Vector3(0, 1, 0);
   private readonly sunDir = new THREE.Vector3();
 
   constructor(
@@ -187,7 +206,7 @@ export class Environment {
       })
     );
     this.stars.frustumCulled = false;
-    scene.add(this.stars);
+    scene.add(this.stars, this.skyline.group, this.celestial.group);
     this.setTime('dusk');
   }
 
@@ -212,6 +231,7 @@ export class Environment {
       u.mieDirectionalG!.value = p.mieG;
       // 夜は月の位置に光の源を置く（空は暗いまま）
       u.sunPosition!.value.copy(this.sunDir);
+      this.trueSun.copy(this.sunDir);
       // 太陽円盤は HDR で極端に明るく、ブルームが画面全体に広がるので抑える
       u.showSunDisc!.value = 0;
       u.cloudCoverage!.value = p.cloud;
@@ -232,7 +252,10 @@ export class Environment {
     this.hemi.groundColor.setHex(p.hemi.ground);
     this.hemi.intensity = p.hemi.intensity;
     this.fog.color.setHex(p.fogColor);
-    this.fog.density = p.fogDensity;
+    this.fog.near = p.fogNear;
+    this.fog.far = p.fogFar;
+    this.skyline.setLook(p.skylineTint, p.skylineLit);
+    this.celestial.setLook(t, this.trueSun, this.sunDir);
     this.scene.environmentIntensity = p.envIntensity;
     this.renderer.toneMappingExposure = p.exposure;
     this.facade.uLit.value = p.lit;
@@ -268,9 +291,15 @@ export class Environment {
     this.sun.position.copy(snapped).addScaledVector(L, 260);
   }
 
-  update(time: number) {
+  update(time: number, camPos: THREE.Vector3) {
+    this.celestial.update(camPos);
     this.sky.material.uniforms.time!.value = time;
     this.envSky.material.uniforms.time!.value = time;
+  }
+
+  /** パーティクルが使う、線形フォグに相当する指数フォグの濃さ */
+  get dustFogDensity(): number {
+    return 1.5 / this.fog.far;
   }
 
   get sunDirection(): THREE.Vector3 {

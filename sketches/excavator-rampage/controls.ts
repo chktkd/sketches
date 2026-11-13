@@ -85,13 +85,34 @@ export class CameraRig {
     this.focus.copy(target);
   }
 
-  update(dt: number, target: THREE.Vector3) {
+  /** 注視点からカメラへ向かう視線が遮られたら、手前に引く距離 */
+  private shown = 0;
+
+  update(
+    dt: number,
+    target: THREE.Vector3,
+    collide?: (from: THREE.Vector3, dir: THREE.Vector3, maxLen: number) => number
+  ) {
     this.time += dt;
     this.focus.lerp(target, 1 - Math.exp(-4.5 * dt));
     const cp = Math.cos(this.pitch);
     this.off
       .set(Math.cos(this.yaw) * cp, Math.sin(this.pitch), Math.sin(this.yaw) * cp)
       .multiplyScalar(this.dist);
+    let len = this.dist;
+    if (collide) {
+      const dir = this.off.clone().normalize();
+      len = Math.min(this.dist, collide(this.focus, dir, this.dist));
+    }
+    if (this.shown > this.dist) this.shown = this.dist;
+    // 遮られたときは素早く寄り、解けたときはゆっくり戻る（ガタつき防止）
+    this.shown =
+      this.shown === 0
+        ? len
+        : len < this.shown
+          ? len
+          : this.shown + (len - this.shown) * (1 - Math.exp(-3 * dt));
+    this.off.multiplyScalar(this.shown / this.dist);
     this.camera.position.copy(this.focus).add(this.off);
     this.camera.position.y = Math.max(2.2, this.camera.position.y);
     this.camera.lookAt(this.focus);

@@ -7,6 +7,8 @@ import { Autopilot, CameraRig, Keys, bindPointer, isActive } from './controls';
 import { Environment, TIMES, TIME_LABEL, type TimeOfDay } from './environment';
 import { type DriveInput, Excavator, MACHINE_SCALE } from './excavator';
 import { PostFX } from './postfx';
+import { Terrain } from './terrain';
+import { wind } from './wind';
 import { City, QUALITY_HIGH, QUALITY_LOW, type WorldBox } from './world';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -64,6 +66,8 @@ function boot() {
   const city = new City(structural, params.has('seed') ? Number(params.get('seed')) : undefined);
   scene.add(city.group);
   const env = new Environment(renderer, scene, city.facade);
+  const terrain = new Terrain(structural === QUALITY_LOW ? 0.5 : 1);
+  scene.add(terrain.group);
   const ex = new Excavator();
   scene.add(ex.root);
   ex.root.traverse((o) => {
@@ -75,7 +79,11 @@ function boot() {
   ex.z = HALF - 40;
   ex.heading = Math.PI / 2;
 
-  const post = new PostFX(renderer, scene, camera, [city.dust.points]);
+  const post = new PostFX(renderer, scene, camera, [
+    city.dust.points,
+    env.celestial.group,
+    env.stars,
+  ]);
   const rig = new CameraRig(camera);
   rig.yaw = Math.PI / 2 + 0.75;
   rig.dist = 84;
@@ -325,11 +333,17 @@ function boot() {
     const fovScale =
       renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
     // 描画バッファの高さではなく CSS ピクセル換算（Points の大きさは drawing buffer 基準）
-    city.update(dt, sunColor, ambient, env.fog.color, env.fog.density, fovScale);
+    city.update(dt, sunColor, ambient, env.fog.color, env.dustFogDensity, fovScale);
 
     focus.set(ex.x, 7 * MACHINE_SCALE, ex.z);
-    rig.update(dt, focus);
-    env.update(time);
+    rig.update(dt, focus, (from, dir, maxLen) => {
+      const hit = city.raycast(from, dir, maxLen);
+      if (!hit) return maxLen;
+      return Math.max(8, from.distanceTo(hit) - 2.5);
+    });
+    env.update(time, camera.position);
+    terrain.update(time);
+    wind.uTime.value = time;
     env.followShadow(tmp.set(ex.x, 0, ex.z));
 
     // 照準の表示（30Hz）

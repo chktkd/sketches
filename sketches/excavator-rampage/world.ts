@@ -204,15 +204,6 @@ export class City {
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     this.group.add(ground);
-    const outer = new THREE.Mesh(
-      new THREE.PlaneGeometry(6000, 6000),
-      new THREE.MeshStandardMaterial({ color: 0x4b5640, roughness: 1 })
-    );
-    outer.rotation.x = -Math.PI / 2;
-    outer.position.y = -0.05;
-    outer.receiveShadow = true;
-    this.group.add(outer);
-
     this.decals = new GroundDecals(quality.decalRes);
     const decalMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(GROUND_EXTENT, GROUND_EXTENT),
