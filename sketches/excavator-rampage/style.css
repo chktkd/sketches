@@ -1,0 +1,299 @@
+:root {
+  --ink: #eef1f4;
+  --muted: #98a3b0;
+  --panel: rgba(13, 16, 20, 0.58);
+  --line: rgba(255, 255, 255, 0.12);
+  --accent: #f2b300;
+  --ui: ui-sans-serif, system-ui, -apple-system, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  background: #0c0f13;
+  color: var(--ink);
+  font-family: var(--ui);
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+#stage {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+}
+.hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: grid;
+  grid-template: 'brand stats' auto 'main main' 1fr 'help tools' auto / 1fr auto;
+  gap: 12px;
+}
+.brand {
+  grid-area: brand;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.55);
+}
+.brand h1 {
+  margin: 2px 0 0;
+  font: 800 clamp(20px, 3.4vw, 30px) / 1.05 var(--ui);
+  letter-spacing: 0.04em;
+}
+.brand h1::first-letter {
+  color: var(--accent);
+}
+.brand p {
+  margin: 6px 0 0;
+  color: rgba(238, 241, 244, 0.78);
+  font-size: 13px;
+}
+.back {
+  color: var(--muted);
+  text-decoration: none;
+  font: 12px var(--mono);
+  pointer-events: auto;
+}
+.back:hover {
+  color: var(--accent);
+}
+
+.stats {
+  grid-area: stats;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  justify-self: end;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  min-width: 96px;
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  display: grid;
+  gap: 2px;
+}
+.stat .label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.stat .value {
+  font: 700 22px / 1.1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.stat .value small {
+  font: 500 12px var(--mono);
+  color: var(--muted);
+}
+.stat.dim .value {
+  font-size: 15px;
+  color: var(--muted);
+}
+.meter {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.meter i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #f2b300, #ff6a2b);
+  transition: width 0.25s;
+}
+
+.help {
+  grid-area: help;
+  align-self: end;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px 12px;
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  max-width: 340px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  transition:
+    opacity 0.25s,
+    transform 0.25s;
+}
+.help h2 {
+  margin: 0 0 6px;
+  font: 700 11px var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+.help dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  align-items: center;
+}
+.help dt {
+  white-space: nowrap;
+  color: var(--muted);
+}
+.help dd {
+  margin: 0;
+}
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 1px 6px;
+  margin-right: 3px;
+  text-align: center;
+  font: 600 11.5px var(--mono);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+.help.closed {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+}
+
+.toolbar {
+  grid-area: tools;
+  align-self: end;
+  justify-self: end;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.toolbar button {
+  pointer-events: auto;
+  font: 600 12.5px var(--ui);
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.toolbar button:hover {
+  border-color: var(--accent);
+}
+.toolbar button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.toolbar button span {
+  color: var(--accent);
+}
+
+.reticle {
+  position: fixed;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 0 18px rgba(242, 179, 0, 0.5);
+  opacity: 0.85;
+  pointer-events: none;
+}
+.reticle::before,
+.reticle::after {
+  content: '';
+  position: absolute;
+  background: var(--accent);
+}
+.reticle::before {
+  left: 50%;
+  top: -7px;
+  bottom: -7px;
+  width: 2px;
+  margin-left: -1px;
+  clip-path: polygon(0 0, 100% 0, 100% 22%, 0 22%, 0 78%, 100% 78%, 100% 100%, 0 100%);
+}
+.reticle::after {
+  top: 50%;
+  left: -7px;
+  right: -7px;
+  height: 2px;
+  margin-top: -1px;
+  clip-path: polygon(0 0, 22% 0, 22% 100%, 0 100%, 78% 0, 100% 0, 100% 100%, 78% 100%);
+}
+
+.loading {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #0c0f13;
+  text-align: center;
+  transition: opacity 0.5s;
+  pointer-events: auto;
+}
+.loading b {
+  display: block;
+  font: 700 18px var(--ui);
+  letter-spacing: 0.06em;
+}
+.loading small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font: 12px var(--mono);
+}
+.loading.done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .hud {
+    grid-template: 'brand' auto 'stats' auto 'main' 1fr 'tools' auto 'help' auto / 1fr;
+    gap: 8px;
+  }
+  .stats {
+    justify-self: start;
+  }
+  .stat {
+    min-width: 0;
+    padding: 6px 10px;
+  }
+  .stat .value {
+    font-size: 17px;
+  }
+  .toolbar {
+    justify-self: start;
+  }
+  .help {
+    max-width: none;
+  }
+}
+@media (max-height: 560px) {
+  .help {
+    display: none;
+  }
+}
