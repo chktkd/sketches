@@ -91,4 +91,32 @@ describe('VoxelWorld', () => {
     const falling = w4.findUnsupported(bi);
     expect(falling.length).toBe(b.alive);
   });
+
+  it('無傷のセルには、破壊で露出した面がない（中空の壁の内外の面は露出済みとみなす）', () => {
+    const w5 = new VoxelWorld(city.buildings);
+    for (let id = 0; id < w5.count; id += 211) expect(w5.fracturedFaces(id)).toBe(0);
+  });
+
+  it('隣のセルを壊すと、その方向の面だけが「破壊で露出した面」になる', () => {
+    const w6 = new VoxelWorld(city.buildings);
+    const b = w6.buildings[city.buildings.findIndex((x) => x.floors >= 4 && x.w >= 6)]!;
+    // 外壁（種類 0）のセルで、+x 側にも壁が続くもの
+    let target = -1;
+    for (let id = b.start; id < b.start + b.count; id++) {
+      const right = w6.idAt((w6.ix[id] as number) + 1, w6.iy[id] as number, w6.iz[id] as number);
+      if (w6.kind[id] === 0 && right >= 0 && w6.kind[right] === 0 && (w6.iy[id] as number) > 2) {
+        target = id;
+        break;
+      }
+    }
+    expect(target).toBeGreaterThanOrEqual(0);
+    const right = w6.idAt(
+      (w6.ix[target] as number) + 1,
+      w6.iy[target] as number,
+      w6.iz[target] as number
+    );
+    expect(w6.fracturedFaces(target)).toBe(0);
+    w6.remove(right);
+    expect(w6.fracturedFaces(target)).toBe(1); // +x のビットだけ
+  });
 });

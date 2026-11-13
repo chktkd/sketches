@@ -29,6 +29,8 @@ export function createFacadeMaterial(): {
     color: 0xffffff,
     roughness: 0.85,
     metalness: 0,
+    // 割れた破片は面ごとに陰影をつける（平面で削った塊に見せる）。立方体のセルは元から平面なので変わらない
+    flatShading: true,
   });
 
   material.onBeforeCompile = (shader) => {
@@ -41,9 +43,13 @@ export function createFacadeMaterial(): {
         `#include <common>
 attribute vec3 aOrigin;
 attribute vec4 aInfo;
+attribute float aBreak;
 varying vec3 vPat;
 varying vec3 vLN;
-flat varying vec4 vInfo;`
+varying float vCut;
+flat varying vec4 vInfo;
+flat varying float vBreak;
+${SHATTER_GLSL}`
       )
       .replace(
         '#include <begin_vertex>',
@@ -52,7 +58,14 @@ flat varying vec4 vInfo;`
 float cs = aInfo.w > 1.5 ? ${(CELL / 2).toFixed(4)} : ${CELL.toFixed(4)};
 vPat = aOrigin + position * cs;
 vLN = normal;
-vInfo = aInfo;`
+vInfo = aInfo;
+vBreak = aBreak;
+{
+  // 破片・欠けたセルの形を、平面で削った不規則な塊に変える（模様の座標は変形前の位置で決める）
+  float cutAmt;
+  transformed = shatter(position, aOrigin, aInfo, aBreak, cutAmt);
+  vCut = cutAmt;
+}`
       );
 
     shader.fragmentShader = shader.fragmentShader
@@ -63,7 +76,9 @@ uniform float uLit;
 uniform float uLitGain;
 varying vec3 vPat;
 varying vec3 vLN;
+varying float vCut;
 flat varying vec4 vInfo;
+flat varying float vBreak;
 ${NOISE_GLSL}
 ${BUMP_GLSL}
 ${FACADE_GLSL}`
@@ -77,7 +92,7 @@ float fH = 0.0;
 vec3 fEmit = vec3(0.0);
 {
   vec3 fAlb;
-  facade(vPat, vLN, vInfo, fAlb, fRough, fMetal, fEmit, fH);
+  facade(vPat, vLN, vInfo, vCut, vBreak, fAlb, fRough, fMetal, fEmit, fH);
   diffuseColor.rgb *= fAlb;
 }`
       )
@@ -102,12 +117,114 @@ normal = bumpNormal(-vViewPosition, normal, fH, faceDirection);`
 totalEmissiveRadiance += fEmit;`
       );
   };
-  material.customProgramCacheKey = () => 'facade-v2';
+  material.customProgramCacheKey = () => 'facade-v3';
   return { material, uniforms };
 }
 
+/**
+ * 破片の形を変える頂点シェーダの部品（本体と影の描画で共有する）。
+ *   モード 1・2（破片）: 立方体を、ランダムな 5 枚の平面で削って、割れた角のある塊にする
+ *   モード 3（壊れた壁の欠けたセル）: 壊れて露出した面を、ノイズでギザギザに欠けさせる
+ * 乱数はセルの元の位置とインスタンス番号から決まるので、生きている間は形が変わらない。
+ */
+const SHATTER_GLSL = /* glsl */ `
+float hs11(float p) {
+  p = fract(p * 0.1031);
+  p *= p + 33.33;
+  p *= p + p;
+  return fract(p);
+}
+vec3 hs31(float p) {
+  vec3 p3 = fract(vec3(p) * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.xxy + p3.yzz) * p3.zyx);
+}
+vec3 hs33(vec3 p3) {
+  p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yxz + 33.33);
+  return fract((p3.xxy + p3.yxx) * p3.zyx);
+}
+float vn3d(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hs33(i).x;
+  float b = hs33(i + vec3(1.0, 0.0, 0.0)).x;
+  float c = hs33(i + vec3(0.0, 1.0, 0.0)).x;
+  float d = hs33(i + vec3(1.0, 1.0, 0.0)).x;
+  float e = hs33(i + vec3(0.0, 0.0, 1.0)).x;
+  float g = hs33(i + vec3(1.0, 0.0, 1.0)).x;
+  float h = hs33(i + vec3(0.0, 1.0, 1.0)).x;
+  float k = hs33(i + vec3(1.0, 1.0, 1.0)).x;
+  return mix(mix(mix(a, b, f.x), mix(c, d, f.x), f.y), mix(mix(e, g, f.x), mix(h, k, f.x), f.y), f.z);
+}
+vec3 shatter(vec3 q, vec3 origin, vec4 info, float brk, out float cut) {
+  cut = 0.0;
+  float mode = floor(info.w + 0.5);
+  if (mode > 0.5 && mode < 2.5) {
+    float sd = hs11(dot(origin, vec3(7.31, 5.17, 9.43)) + float(gl_InstanceID) * 0.137 + 0.5);
+    vec3 p0 = q;
+    for (int k = 0; k < 5; k++) {
+      vec3 n = normalize(hs31(sd * 91.7 + float(k) * 1.713) - 0.5 + vec3(1e-4));
+      float d = 0.27 + 0.2 * hs11(sd * 37.1 + float(k) * 3.7);
+      float over = dot(q, n) - d;
+      if (over > 0.0) q -= over * n;
+    }
+    q += (hs33(q * 17.0 + sd) - 0.5) * 0.05;
+    cut = clamp(length(q - p0) * 6.0, 0.0, 1.0);
+  } else if (mode > 2.5) {
+    float m = floor(brk + 0.5);
+    vec3 wp = origin + q * ${CELL.toFixed(3)};
+    vec3 p0 = q;
+    for (int a = 0; a < 3; a++) {
+      for (int sg = 0; sg < 2; sg++) {
+        float s = sg == 0 ? 1.0 : -1.0;
+        float bit = float(a * 2 + sg);
+        if (mod(floor(m / exp2(bit) + 0.001), 2.0) < 0.5) continue;
+        if (p0[a] * s < 0.49) continue;
+        // 世界座標のノイズなので、隣り合うセルの境界で欠け方が連続する
+        float n = vn3d(wp * 1.15 + float(a) * 3.1) * 0.65 + vn3d(wp * 3.7) * 0.35;
+        q[a] -= s * (0.04 + 0.62 * n * n);
+        int t1 = (a + 1) % 3;
+        int t2 = (a + 2) % 3;
+        q[t1] += (vn3d(wp * 2.3 + 7.0) - 0.5) * 0.16;
+        q[t2] += (vn3d(wp * 2.3 + 19.0) - 0.5) * 0.16;
+      }
+    }
+    cut = clamp(length(q - p0) * 3.0, 0.0, 1.0);
+  }
+  return q;
+}
+`;
+
+/** 影の描画にも同じ変形をかける（影が立方体のままだと、破片の形と食い違う） */
+export function createFacadeDepthMaterial(): THREE.MeshDepthMaterial {
+  const m = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+attribute vec3 aOrigin;
+attribute vec4 aInfo;
+attribute float aBreak;
+${SHATTER_GLSL}`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+{
+  float cutAmt;
+  transformed = shatter(position, aOrigin, aInfo, aBreak, cutAmt);
+}`
+      );
+  };
+  m.customProgramCacheKey = () => 'facade-depth-v1';
+  return m;
+}
+
 const FACADE_GLSL = /* glsl */ `
-void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float met, out vec3 emi, out float hgt) {
+void facade(vec3 p, vec3 ln, vec4 info, float cut, float brk, out vec3 alb, out float rou, out float met, out vec3 emi, out float hgt) {
   vec3 an = abs(ln);
   // 属性は整数値で持ち、補間誤差でハッシュが画素ごとに変わらないよう丸める
   float seed = floor(info.x + 0.5);
@@ -274,11 +391,35 @@ void facade(vec3 p, vec3 ln, vec4 info, out vec3 alb, out float rou, out float m
     emi = mix(emi, vec3(1.0, 0.76, 0.5) * uLit * gf * 0.5 * uLitGain * 0.7, lod);
   }
 
-  // 破片になったセル: ほこりをかぶり、ガラスは割れて光らない
-  if (dmg > 0.5) {
-    vec3 dust = vec3(0.56, 0.53, 0.48) * (0.7 + 0.5 * n1);
-    alb = mix(alb, dust, 0.32);
-    emi *= 0.35;
+  // 破断面: 割れた面・壊れて露出した面は、骨材の見えるコンクリートの断面にする
+  float fr = 0.0;
+  float mode = floor(info.w + 0.5);
+  if (mode > 0.5 && mode < 2.5) {
+    fr = smoothstep(0.1, 0.45, cut);
+  } else if (mode > 2.5) {
+    float bi = an.x > 0.5 ? (ln.x > 0.0 ? 0.0 : 1.0) : (an.y > 0.5 ? (ln.y > 0.0 ? 2.0 : 3.0) : (ln.z > 0.0 ? 4.0 : 5.0));
+    fr = mod(floor(brk / exp2(bi) + 0.001), 2.0) > 0.5 ? 1.0 : 0.0;
+  }
+  if (fr > 0.0) {
+    float agg = n3(p * 14.0);
+    float peb = step(0.8, h21(floor(vec2(p.x + p.z, p.y) * 44.0)));
+    float peb2 = step(0.9, h21(floor(vec2(p.y, p.x - p.z) * 71.0 + 5.0)));
+    vec3 cement = vec3(0.34, 0.33, 0.315) * (0.6 + 0.7 * agg);
+    cement = mix(cement, vec3(0.5, 0.48, 0.44), peb * 0.65);
+    cement = mix(cement, vec3(0.2, 0.19, 0.18), peb2 * 0.6);
+    alb = mix(alb, cement, fr);
+    rou = mix(rou, 0.97, fr);
+    met = mix(met, 0.0, fr);
+    emi *= 1.0 - fr;
+    hgt = mix(hgt, 0.09 * n3(p * 10.0) + 0.04 * n3(p * 30.0), fr);
+  }
+
+  // 破片: ほこりをかぶり、ガラスは割れて光らない。欠けて残ったセルは薄く粉をかぶる
+  float dustAmt = dmg > 2.5 ? 0.12 : (dmg > 0.5 ? 0.32 : 0.0);
+  if (dustAmt > 0.0) {
+    vec3 dustCol = vec3(0.56, 0.53, 0.48) * (0.7 + 0.5 * n1);
+    alb = mix(alb, dustCol, dustAmt);
+    emi *= dmg > 2.5 ? 0.6 : 0.35;
     rou = max(rou, 0.7);
     met *= 0.4;
   }

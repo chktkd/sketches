@@ -33,6 +33,8 @@ export class VoxelWorld {
   kind: Uint8Array;
   bld: Uint16Array;
   alive: Uint8Array;
+  /** 建設直後に隣接していた方向のビット（0:+x 1:-x 2:+y 3:-y 4:+z 5:-z） */
+  readonly initialNeighbors: Uint8Array;
   private stamp: Uint32Array;
   private stampNo = 0;
 
@@ -48,6 +50,8 @@ export class VoxelWorld {
     this.alive = new Uint8Array(total);
     this.stamp = new Uint32Array(total);
     specs.forEach((s, bi) => this.addBuilding(s, bi));
+    this.initialNeighbors = new Uint8Array(total);
+    for (let id = 0; id < total; id++) this.initialNeighbors[id] = this.neighborBits(id);
   }
 
   static index(ix: number, iy: number, iz: number): number {
@@ -95,6 +99,29 @@ export class VoxelWorld {
       dirty: false,
       collapsed: false,
     });
+  }
+
+  /** いま隣接している方向のビット（0:+x 1:-x 2:+y 3:-y 4:+z 5:-z） */
+  neighborBits(id: number): number {
+    const x = this.ix[id] as number;
+    const y = this.iy[id] as number;
+    const z = this.iz[id] as number;
+    return (
+      (this.idAt(x + 1, y, z) >= 0 ? 1 : 0) |
+      (this.idAt(x - 1, y, z) >= 0 ? 2 : 0) |
+      (this.idAt(x, y + 1, z) >= 0 ? 4 : 0) |
+      (this.idAt(x, y - 1, z) >= 0 ? 8 : 0) |
+      (this.idAt(x, y, z + 1) >= 0 ? 16 : 0) |
+      (this.idAt(x, y, z - 1) >= 0 ? 32 : 0)
+    );
+  }
+
+  /**
+   * 破壊によって新しく露出した面のビット。
+   * 中空の壁がもともと持つ内外の面は含めない（建設時に隣がなかった面は露出済みとみなす）。
+   */
+  fracturedFaces(id: number): number {
+    return (this.initialNeighbors[id] as number) & ~this.neighborBits(id);
   }
 
   /** セルを取り除く。すでに無ければ false */

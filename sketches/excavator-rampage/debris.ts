@@ -66,6 +66,7 @@ const tq = new THREE.Quaternion();
 const tq2 = new THREE.Quaternion();
 const tv = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
+const tmpH = new THREE.Vector3();
 
 /**
  * 箱形の剛体破片のプール。InstancedMesh 1 つに対応する。
@@ -101,7 +102,9 @@ export class DebrisPool {
     private readonly onImpact: (e: ImpactEvent) => void,
     private readonly groundOnly = false,
     /** 強く着地したセルが、半分の大きさの 8 個に砕ける */
-    private readonly canFracture = false
+    private readonly canFracture = false,
+    /** 細長い棒（鉄筋）: 地面では長軸が水平になるよう倒れる */
+    private readonly bar = false
   ) {
     const cap = mesh.instanceMatrix.count;
     this.cap = cap;
@@ -384,7 +387,28 @@ export class DebrisPool {
 
       // 地面でゆっくりなら、一番近い面が下になるように倒れ込む
       const speed2 = vx * vx + vy * vy + vz * vz;
-      if (touching && speed2 < 9) {
+      if (touching && speed2 < 9 && this.bar) {
+        // 棒: ローカル Y（長軸）を水平へ倒す
+        tq.set(qx, qy, qz, qw);
+        tv.set(0, 1, 0).applyQuaternion(tq);
+        if (Math.abs(tv.y) > 0.02) {
+          const hx = tv.x;
+          const hz = tv.z;
+          const hl = Math.hypot(hx, hz);
+          tq2.setFromUnitVectors(tv, hl < 1e-4 ? tmpH.set(1, 0, 0) : tmpH.set(hx / hl, 0, hz / hl));
+          tq2.slerp(tq.set(0, 0, 0, 1), 1 - Math.min(1, 6 * step));
+          tq.set(qx, qy, qz, qw).premultiply(tq2).normalize();
+          qx = tq.x;
+          qy = tq.y;
+          qz = tq.z;
+          qw = tq.w;
+          const nr10 = 2 * (qx * qy + qw * qz);
+          const nr11 = 1 - 2 * (qx * qx + qz * qz);
+          const nr12 = 2 * (qy * qz - qw * qx);
+          ext = 0.5 * (Math.abs(nr10) * sx + Math.abs(nr11) * sy + Math.abs(nr12) * sz);
+          if (y - ext < ground) y = ground + ext;
+        }
+      } else if (touching && speed2 < 9) {
         tq.set(qx, qy, qz, qw);
         // 箱のローカル軸のうち、ワールド上向きに一番近いものを探す
         let best = -1;

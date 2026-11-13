@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CELL, GRID_N, GRID_Y, HALF, WORLD_SIZE, cellX, cellY, cellZ } from './config';
 import { DebrisPool, DustSystem, type ImpactEvent, RubbleMap, SparkSystem } from './debris';
-import { createFacadeMaterial, type FacadeUniforms } from './facade';
+import { type FacadeUniforms, createFacadeDepthMaterial, createFacadeMaterial } from './facade';
 import { GROUND_EXTENT, GroundDecals, paintGround } from './ground';
 import { type CityLayout, generateCity } from './layout';
 import { clipRayToSquare } from './ray';
@@ -15,6 +15,8 @@ export interface Quality {
   groundRes: number;
   decalRes: number;
   maxCells: number;
+  /** 壊れた壁の断面（欠けたセル）の最大数 */
+  maxBroken: number;
   maxShards: number;
   dust: number;
 }
@@ -22,14 +24,16 @@ export interface Quality {
 export const QUALITY_HIGH: Quality = {
   groundRes: 4096,
   decalRes: 2048,
-  maxCells: 14000,
+  maxCells: 9000,
+  maxBroken: 12000,
   maxShards: 16000,
   dust: 7000,
 };
 export const QUALITY_LOW: Quality = {
   groundRes: 2048,
   decalRes: 1024,
-  maxCells: 7000,
+  maxCells: 4500,
+  maxBroken: 6000,
   maxShards: 7000,
   dust: 3500,
 };
@@ -65,6 +69,7 @@ interface RoofProp {
   gone: boolean;
 }
 
+const UP_Y = new THREE.Vector3(0, 1, 0);
 const v = new THREE.Vector3();
 const vel = new THREE.Vector3();
 
@@ -100,6 +105,26 @@ export class City {
   private roofBoxes!: THREE.InstancedMesh;
   private roofCyls!: THREE.InstancedMesh;
   private roofDirty = false;
+  private originArr!: Float32Array;
+  private infoArr!: Float32Array;
+  /** 壊れた壁に隣接して欠けた、断面を持つセル（静的メッシュから移して描画する） */
+  private brokenMesh!: THREE.InstancedMesh;
+  private brokenOrigin!: THREE.InstancedBufferAttribute;
+  private brokenInfo!: THREE.InstancedBufferAttribute;
+  private brokenBreak!: THREE.InstancedBufferAttribute;
+  private brokenIndex!: Int32Array;
+  private brokenFree: number[] = [];
+  private brokenCount = 0;
+  private brokenCap = 0;
+  private brokenDirty = false;
+  private rebarPool!: DebrisPool;
+  /** 断面から突き出た鉄筋 */
+  private stubMesh!: THREE.InstancedMesh;
+  private stubCap = 0;
+  private stubNext = 0;
+  private stubOwner!: Int32Array;
+  private stubsByCell = new Map<number, number[]>();
+  private stubDirty = false;
 
   constructor(quality: Quality, seed?: number) {
     this.layout = generateCity(seed);
@@ -147,13 +172,21 @@ export class City {
     this.staticMesh.instanceColor = new THREE.InstancedBufferAttribute(this.colors.slice(), 3);
     geo.setAttribute('aOrigin', new THREE.InstancedBufferAttribute(origin, 3));
     geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 4));
+    geo.setAttribute('aBreak', new THREE.InstancedBufferAttribute(new Float32Array(n), 1));
+    this.originArr = origin;
+    this.infoArr = info;
     this.staticMesh.castShadow = true;
     this.staticMesh.receiveShadow = true;
     this.staticMesh.frustumCulled = false;
     this.group.add(this.staticMesh);
 
     // ── 破片（セル）のプール
-    const dGeo = new THREE.BoxGeometry(1, 1, 1);
+    // 割れた塊に変形できるよう、各面を 4 分割した立方体
+    const dGeo = new THREE.BoxGeometry(1, 1, 1, 4, 4, 4);
+    dGeo.setAttribute(
+      'aBreak',
+      new THREE.InstancedBufferAttribute(new Float32Array(quality.maxCells), 1)
+    );
     dGeo.setAttribute(
       'aOrigin',
       new THREE.InstancedBufferAttribute(new Float32Array(quality.maxCells * 3), 3)
@@ -170,16 +203,65 @@ export class City {
     cellMesh.castShadow = true;
     cellMesh.receiveShadow = true;
     cellMesh.frustumCulled = false;
+    cellMesh.customDepthMaterial = createFacadeDepthMaterial();
     this.group.add(cellMesh);
+
+    // ── 壊れた壁の断面: ギザギザに欠けたセル
+    this.brokenCap = quality.maxBroken;
+    this.brokenIndex = new Int32Array(n).fill(-1);
+    const bGeo = new THREE.BoxGeometry(1, 1, 1, 4, 4, 4);
+    this.brokenOrigin = new THREE.InstancedBufferAttribute(
+      new Float32Array(quality.maxBroken * 3),
+      3
+    );
+    this.brokenInfo = new THREE.InstancedBufferAttribute(
+      new Float32Array(quality.maxBroken * 4),
+      4
+    );
+    this.brokenBreak = new THREE.InstancedBufferAttribute(new Float32Array(quality.maxBroken), 1);
+    bGeo.setAttribute('aOrigin', this.brokenOrigin);
+    bGeo.setAttribute('aInfo', this.brokenInfo);
+    bGeo.setAttribute('aBreak', this.brokenBreak);
+    this.brokenMesh = new THREE.InstancedMesh(bGeo, material, quality.maxBroken);
+    this.brokenMesh.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(quality.maxBroken * 3),
+      3
+    );
+    (this.brokenMesh.instanceMatrix.array as Float32Array).fill(0);
+    this.brokenMesh.count = 0;
+    this.brokenMesh.castShadow = true;
+    this.brokenMesh.receiveShadow = true;
+    this.brokenMesh.frustumCulled = false;
+    this.brokenMesh.customDepthMaterial = createFacadeDepthMaterial();
+    this.group.add(this.brokenMesh);
+
+    // ── 断面から突き出た鉄筋
+    this.stubCap = 5000;
+    this.stubOwner = new Int32Array(this.stubCap).fill(-1);
+    const rebarGeo = new THREE.CylinderGeometry(0.035, 0.035, 1, 5);
+    rebarGeo.translate(0, 0.5, 0);
+    const rebarMat = new THREE.MeshStandardMaterial({
+      color: 0x5b3b2a,
+      roughness: 0.6,
+      metalness: 0.65,
+    });
+    this.stubMesh = new THREE.InstancedMesh(rebarGeo, rebarMat, this.stubCap);
+    (this.stubMesh.instanceMatrix.array as Float32Array).fill(0);
+    this.stubMesh.count = this.stubCap;
+    this.stubMesh.castShadow = true;
+    this.stubMesh.frustumCulled = false;
+    this.group.add(this.stubMesh);
 
     // ── 細かい破片
     this.shardMat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
-      roughness: 0.92,
-      metalness: 0,
+      roughness: 0.8,
+      metalness: 0.05,
+      flatShading: true,
     });
     const shardMesh = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(1, 1, 1),
+      // 角ばった不規則な小片（20 面体を非一様にスケールして使う）
+      new THREE.IcosahedronGeometry(0.5, 0),
       this.shardMat,
       quality.maxShards
     );
@@ -195,6 +277,11 @@ export class City {
     const impact = (e: ImpactEvent) => this.handleImpact(e);
     this.cellPool = new DebrisPool(cellMesh, this.voxels, this.rubble, impact, false, true);
     this.shardPool = new DebrisPool(shardMesh, this.voxels, this.rubble, impact, true);
+    const barMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), rebarMat, 2500);
+    barMesh.castShadow = true;
+    barMesh.frustumCulled = false;
+    this.group.add(barMesh);
+    this.rebarPool = new DebrisPool(barMesh, this.voxels, this.rubble, impact, true, false, true);
 
     // ── 地面
     const { map, bump, rough } = paintGround(this.layout, quality.groundRes);
@@ -305,6 +392,8 @@ export class City {
     (this.staticMesh.instanceMatrix.array as Float32Array).fill(0, id * 16, id * 16 + 16);
     this.staticDirty = true;
     this.stats.destroyedCells++;
+    this.unbreak(id);
+    this.markNeighborsBroken(id);
     const x = cellX(vw.ix[id] as number);
     const y = cellY(vw.iy[id] as number);
     const z = cellZ(vw.iz[id] as number);
@@ -326,9 +415,11 @@ export class City {
       wx: (r.next() - 0.5) * 4 * rotK,
       wy: (r.next() - 0.5) * 4 * rotK,
       wz: (r.next() - 0.5) * 4 * rotK,
-      sx: CELL,
-      sy: CELL,
-      sz: CELL,
+      // 立方体のままにしない: 床スラブは薄い板、壁は厚みのある壁板に近い寸法にばらつかせる
+      sx: CELL * (vw.kind[id] === 1 ? r.range(0.8, 1.05) : r.range(0.7, 1.05)),
+      sy: CELL * (vw.kind[id] === 1 ? r.range(0.38, 0.62) : r.range(0.7, 1.05)),
+      sz: CELL * (vw.kind[id] === 1 ? r.range(0.8, 1.05) : r.range(0.5, 1.0)),
+      q: [r.next() - 0.5, r.next() - 0.5, r.next() - 0.5, r.next() * 0.5 + 0.5],
       origin: [x, y, z],
       info: [Math.floor(b.seed), b.style, vw.kind[id] as number, 1],
       color: [
@@ -364,7 +455,194 @@ export class City {
         });
       }
     }
+    // 鉄筋が折れて飛ぶ
+    if (r.chance(0.2)) {
+      const len = r.range(1.0, 2.6);
+      const a = r.next() * Math.PI * 2;
+      const ax = Math.cos(a);
+      const az = Math.sin(a);
+      const ang = r.range(0.2, 3.0);
+      this.rebarPool.spawn({
+        x,
+        y,
+        z,
+        vx: vx * 0.8 + (r.next() - 0.5) * 6,
+        vy: vy * 0.8 + r.next() * 4,
+        vz: vz * 0.8 + (r.next() - 0.5) * 6,
+        wx: (r.next() - 0.5) * 10,
+        wy: (r.next() - 0.5) * 10,
+        wz: (r.next() - 0.5) * 10,
+        sx: 0.06,
+        sy: len,
+        sz: 0.06,
+        q: [ax * Math.sin(ang / 2), 0.3, az * Math.sin(ang / 2), Math.cos(ang / 2)],
+      });
+    }
+    // 窓ガラスの破片: 薄くて明るい青緑の欠片
+    if (vw.kind[id] === 0 && (b.style === 0 || b.style === 3 || r.chance(0.35))) {
+      for (let i = 0; i < 4; i++) {
+        const s = r.range(0.12, 0.36);
+        this.shardPool.spawn({
+          x: x + (r.next() - 0.5) * CELL,
+          y: y + (r.next() - 0.5) * CELL,
+          z: z + (r.next() - 0.5) * CELL,
+          vx: vx * 0.6 + (r.next() - 0.5) * 8,
+          vy: vy * 0.6 + r.next() * 5,
+          vz: vz * 0.6 + (r.next() - 0.5) * 8,
+          wx: (r.next() - 0.5) * 22,
+          wy: (r.next() - 0.5) * 22,
+          wz: (r.next() - 0.5) * 22,
+          sx: s * 1.4,
+          sy: s * 0.07,
+          sz: s,
+          color: [0.55, 0.78, 0.9],
+        });
+      }
+    }
     return true;
+  }
+
+  /* ───────── 壊れた壁の断面（欠けたセル）と鉄筋 ───────── */
+
+  /** 壊したセルの隣のうち、壊れて新しく面が露出したものを「欠けたセル」へ移す */
+  private markNeighborsBroken(id: number) {
+    const vw = this.voxels;
+    const x = vw.ix[id] as number;
+    const y = vw.iy[id] as number;
+    const z = vw.iz[id] as number;
+    for (const [dx, dy, dz] of [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ] as const) {
+      const nid = vw.idAt(x + dx, y + dy, z + dz);
+      if (nid >= 0) this.markBroken(nid);
+    }
+  }
+
+  private markBroken(nid: number) {
+    const vw = this.voxels;
+    const mask = vw.fracturedFaces(nid);
+    if (mask === 0) return;
+    let bi = this.brokenIndex[nid] as number;
+    if (bi < 0) {
+      bi = this.brokenFree.pop() ?? (this.brokenCount < this.brokenCap ? this.brokenCount++ : -1);
+      if (bi < 0) return; // 上限: 欠けずにそのまま残す
+      this.brokenIndex[nid] = bi;
+      const sm = this.staticMesh.instanceMatrix.array as Float32Array;
+      (this.brokenMesh.instanceMatrix.array as Float32Array).set(
+        sm.subarray(nid * 16, nid * 16 + 16),
+        bi * 16
+      );
+      sm.fill(0, nid * 16, nid * 16 + 16);
+      this.staticDirty = true;
+      this.brokenOrigin.setXYZ(
+        bi,
+        this.originArr[nid * 3] as number,
+        this.originArr[nid * 3 + 1] as number,
+        this.originArr[nid * 3 + 2] as number
+      );
+      this.brokenInfo.setXYZW(
+        bi,
+        this.infoArr[nid * 4] as number,
+        this.infoArr[nid * 4 + 1] as number,
+        this.infoArr[nid * 4 + 2] as number,
+        3
+      );
+      this.brokenMesh.instanceColor!.setXYZ(
+        bi,
+        this.colors[nid * 3] as number,
+        this.colors[nid * 3 + 1] as number,
+        this.colors[nid * 3 + 2] as number
+      );
+      this.brokenBreak.setX(bi, 0);
+      this.brokenMesh.count = Math.max(this.brokenMesh.count, bi + 1);
+    }
+    const old = this.brokenBreak.getX(bi);
+    if (old !== mask) {
+      this.brokenBreak.setX(bi, mask);
+      this.addStubs(nid, mask & ~old);
+    }
+    this.brokenDirty = true;
+  }
+
+  /** 欠けたセルが壊れたら、断面とそこから出た鉄筋も消す */
+  private unbreak(id: number) {
+    const bi = this.brokenIndex[id] as number;
+    if (bi >= 0) {
+      (this.brokenMesh.instanceMatrix.array as Float32Array).fill(0, bi * 16, bi * 16 + 16);
+      this.brokenBreak.setX(bi, 0);
+      this.brokenFree.push(bi);
+      this.brokenIndex[id] = -1;
+      this.brokenDirty = true;
+    }
+    const stubs = this.stubsByCell.get(id);
+    if (stubs) {
+      for (const s of stubs) {
+        (this.stubMesh.instanceMatrix.array as Float32Array).fill(0, s * 16, s * 16 + 16);
+        this.stubOwner[s] = -1;
+      }
+      this.stubsByCell.delete(id);
+      this.stubDirty = true;
+    }
+  }
+
+  /** 新しく露出した面（ビット）から、鉄筋を何本か突き出させる */
+  private addStubs(cell: number, bits: number) {
+    const vw = this.voxels;
+    const cx = cellX(vw.ix[cell] as number);
+    const cy = cellY(vw.iy[cell] as number);
+    const cz = cellZ(vw.iz[cell] as number);
+    const r = this.rng;
+    const axes = [0, 0, 1, 1, 2, 2];
+    const signs = [1, -1, 1, -1, 1, -1];
+    const n = new THREE.Vector3();
+    const t = new THREE.Vector3();
+    const pos = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const m4 = new THREE.Matrix4();
+    const scl = new THREE.Vector3();
+    for (let b = 0; b < 6; b++) {
+      if (!(bits & (1 << b)) || !r.chance(0.5)) continue;
+      const a = axes[b] as number;
+      const sg = signs[b] as number;
+      for (let k = r.chance(0.5) ? 2 : 1; k > 0; k--) {
+        n.set(a === 0 ? sg : 0, a === 1 ? sg : 0, a === 2 ? sg : 0);
+        // 面の中で位置をずらし、断面の奥から外へ向けて少し傾けて出す
+        pos.set(cx, cy, cz).addScaledVector(n, CELL / 2 - 0.35);
+        for (const ax of [(a + 1) % 3, (a + 2) % 3]) {
+          const off = (r.next() - 0.5) * 1.1;
+          if (ax === 0) pos.x += off;
+          else if (ax === 1) pos.y += off;
+          else pos.z += off;
+        }
+        t.set(r.next() - 0.5, r.next() - 0.5, r.next() - 0.5);
+        dir.copy(n).addScaledVector(t, 0.7).normalize();
+        q.setFromUnitVectors(UP_Y, dir);
+        scl.set(1, r.range(0.4, 1.5), 1);
+        m4.compose(pos, q, scl);
+        const slot = this.stubNext;
+        this.stubNext = (this.stubNext + 1) % this.stubCap;
+        const prev = this.stubOwner[slot] as number;
+        if (prev >= 0) {
+          const list = this.stubsByCell.get(prev);
+          if (list) {
+            const i = list.indexOf(slot);
+            if (i >= 0) list.splice(i, 1);
+          }
+        }
+        this.stubOwner[slot] = cell;
+        const list = this.stubsByCell.get(cell) ?? [];
+        list.push(slot);
+        this.stubsByCell.set(cell, list);
+        this.stubMesh.setMatrixAt(slot, m4);
+        this.stubDirty = true;
+      }
+    }
   }
 
   /** 箱（OBB）に触れたセル・小物を壊す。壊したセルの数を返す */
@@ -535,6 +813,8 @@ export class City {
 
     this.cellPool.update(dt);
     this.shardPool.update(dt);
+    this.rebarPool.update(dt);
+    this.flushBroken();
     this.updateSmokes(dt);
     this.sparks.update(dt);
     this.updateRoofProps();
@@ -672,6 +952,21 @@ export class City {
     };
     place(boxes, this.roofBoxes, 'box');
     place(cyls, this.roofCyls, 'cyl');
+  }
+
+  private flushBroken() {
+    if (this.brokenDirty) {
+      this.brokenMesh.instanceMatrix.needsUpdate = true;
+      this.brokenMesh.instanceColor!.needsUpdate = true;
+      this.brokenOrigin.needsUpdate = true;
+      this.brokenInfo.needsUpdate = true;
+      this.brokenBreak.needsUpdate = true;
+      this.brokenDirty = false;
+    }
+    if (this.stubDirty) {
+      this.stubMesh.instanceMatrix.needsUpdate = true;
+      this.stubDirty = false;
+    }
   }
 
   /** 崩壊したビルの跡から、しばらく煙が立ち昇る */
