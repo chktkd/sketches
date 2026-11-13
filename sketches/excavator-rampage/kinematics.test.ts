@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LIMITS, forward, groundReach, inverse } from './kinematics';
+import { LIMITS, MIN_BAND, approachBand, forward, groundReach, inverse } from './kinematics';
 
 describe('kinematics', () => {
   it('逆運動学の解を順運動学に戻すと、目標の刃先位置・バケット角に一致する', () => {
@@ -32,5 +32,24 @@ describe('kinematics', () => {
     expect(r.max).toBeGreaterThan(24);
     expect(r.min).toBeGreaterThan(5);
     expect(r.min).toBeLessThan(r.max);
+  });
+});
+
+describe('approachBand', () => {
+  const reach = groundReach();
+
+  it('どの高さの目標でも、後退と前進の境界の間に停止できる幅がある（前後に往復しない）', () => {
+    for (let y = 0; y <= 45; y += 0.5) {
+      const { near, far } = approachBand(y, reach.min);
+      expect(far - near, `height ${y}`).toBeGreaterThanOrEqual(MIN_BAND);
+    }
+  });
+
+  it('高い目標ほど遠い側の境界は近づくが、近い側の境界を下回らない', () => {
+    const low = approachBand(0, reach.min);
+    const high = approachBand(40, reach.min);
+    expect(high.far).toBeLessThanOrEqual(low.far);
+    expect(high.far).toBeGreaterThan(high.near);
+    expect(high.near).toBe(low.near);
   });
 });

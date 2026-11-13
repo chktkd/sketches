@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { type DriveInput, type Excavator, MACHINE_SCALE } from './excavator';
-import { SWING_Y, groundReach, inverse, clamp } from './kinematics';
+import { SWING_Y, approachBand, groundReach, inverse, clamp } from './kinematics';
 import { REST_POSE } from './excavator';
 
 /* ───────────── キーボード ───────────── */
@@ -174,8 +174,7 @@ export class Autopilot {
     const headErr = wrap(desired - ex.heading);
     const ty = (this.target.y - pivot.y) / S;
     // 高い目標ほど、腕を立てる分だけ近づく
-    const stopDist = clamp(20 - Math.max(0, this.target.y / S) * 0.35, 13, 21);
-    const nearLimit = Math.max(this.reach.min + 3, 11);
+    const { near: nearLimit, far: farLimit } = approachBand(this.target.y / S, this.reach.min);
     const swingRel = wrap(desired - ex.heading);
 
     if (this.phase === 'approach') {
@@ -190,7 +189,7 @@ export class Autopilot {
         5,
         1.4
       );
-      if (dh > stopDist + 1.2) {
+      if (dh > farLimit) {
         const turn = clamp(-headErr * 2.2, -1, 1);
         const drive = Math.abs(headErr) > 0.9 ? 0 : 1 - Math.abs(headErr) * 0.6;
         return { drive, turn };

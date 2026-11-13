@@ -119,3 +119,20 @@ export function groundReach(): { min: number; max: number } {
   }
   return { min, max };
 }
+
+/**
+ * クリック粉砕の接近フェーズで、旋回中心から目標までの距離をどの範囲に収めるか。
+ * near より近ければ後退、far より遠ければ前進し、その間なら停止して構えに移る。
+ * 高い目標ほど腕を立てるので近づくが、near との間には必ず停止できる幅（MIN_BAND）を残す。
+ * （残さないと、前進と後退の境界が逆転して機体が前後に往復し続ける）
+ */
+export const MIN_BAND = 2.5;
+
+export function approachBand(
+  targetHeight: number,
+  groundReachMin: number
+): { near: number; far: number } {
+  const near = Math.max(groundReachMin + 3, 11);
+  const desired = clamp(20 - Math.max(0, targetHeight) * 0.35, 13, 21) + 1.2;
+  return { near, far: Math.max(desired, near + MIN_BAND) };
+}
