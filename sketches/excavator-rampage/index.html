@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>巨大ショベルカーで街を壊す · sketches</title>
+  </head>
+  <body>
+    <canvas id="stage" aria-label="3D の街と巨大ショベルカー"></canvas>
+
+    <div class="hud">
+      <header class="brand">
+        <a class="back" href="../../">sketches /</a>
+        <h1>RAMPAGE-9000</h1>
+        <p>巨大ショベルカーで、街を更地にする。</p>
+      </header>
+
+      <section class="stats" aria-live="off">
+        <div class="stat">
+          <span class="label">破壊率</span>
+          <span class="value"><b id="pct">0</b><small>%</small></span>
+          <span class="meter"><i id="pct-bar"></i></span>
+        </div>
+        <div class="stat">
+          <span class="label">倒壊したビル</span>
+          <span class="value"
+            ><b id="down">0</b><small> / <span id="bld">0</span></small></span
+          >
+        </div>
+        <div class="stat dim">
+          <span class="label">FPS</span>
+          <span class="value"><b id="fps">--</b></span>
+        </div>
+      </section>
+
+      <aside class="help" id="help">
+        <h2>操作</h2>
+        <dl>
+          <dt><kbd>クリック</kbd></dt>
+          <dd>そこへ歩いて行って叩き潰す</dd>
+          <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt>
+          <dd>走行・旋回</dd>
+          <dt><kbd>←</kbd><kbd>→</kbd></dt>
+          <dd>上部旋回</dd>
+          <dt><kbd>↑</kbd><kbd>↓</kbd></dt>
+          <dd>ブーム</dd>
+          <dt><kbd>Q</kbd><kbd>E</kbd></dt>
+          <dd>アーム</dd>
+          <dt><kbd>Z</kbd><kbd>X</kbd></dt>
+          <dd>バケット</dd>
+          <dt><kbd>Space</kbd></dt>
+          <dd>カーソル位置を叩く</dd>
+          <dt>ドラッグ / ホイール</dt>
+          <dd>視点・ズーム</dd>
+        </dl>
+      </aside>
+
+      <nav class="toolbar" aria-label="設定">
+        <button type="button" id="btn-time" title="時間帯 (T)">
+          <span id="time-label">夕景</span>
+        </button>
+        <button type="button" id="btn-quality" title="画質 (G)">
+          画質 <span id="quality-label">高</span>
+        </button>
+        <button type="button" id="btn-sound" title="音 (M)" aria-pressed="false">
+          音 <span id="sound-label">ON</span>
+        </button>
+        <button type="button" id="btn-help" title="操作の表示 (H)">操作</button>
+      </nav>
+
+      <div id="reticle" class="reticle" hidden></div>
+      <div id="loading" class="loading">
+        <div><b>街を生成中…</b><small>ビル 120 棟・5 万個のセル</small></div>
+      </div>
+      <div id="nogl" class="loading" hidden>
+        <div><b>WebGL2 が使えません</b><small>対応ブラウザでお試しください</small></div>
+      </div>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
