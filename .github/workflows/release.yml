@@ -1,0 +1,38 @@
+name: Release
+
+run-name: "Release / ${{ github.ref_name }} by @${{ github.actor }}"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Print the version without creating a tag or release'
+        required: false
+        type: boolean
+        default: false
+
+# A release run tags and publishes, which is not idempotent; never cancel it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Release
+        uses: chktkd/common-github-actions/actions/release@be303b96f27e4a1259af14f41c87c3b5a2eaea44 # v13.1.0
+        with:
+          dry-run: ${{ inputs.dry-run || false }}

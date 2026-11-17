@@ -33,3 +33,8 @@
 - 公開先は handbook の Deployment Standards（公開サイトは Vercel / Cloudflare Pages）と異なり、GitHub Pages を選んでいる。ビルド成果物が静的ファイルだけで、リポジトリと公開先を1か所で完結させるため
 - GIF エンコーダは `sketches/88x31-banner/gif.ts` に自前実装している。同じディレクトリの `gif.test.ts` が、テスト用デコーダ（`gif-decode.ts`）でのラウンドトリップを検証する
 - 現状は単一パッケージ（devDependencies をルートで共有）。sketch ごとに依存のバージョンやビルドツールを変えたくなったら、pnpm workspace と CI の matrix に移す
+
+## リリース
+- `main` への push ごとに `.github/workflows/release.yml` が、前回 tag 以降のコミット subject から版を決めて tag と GitHub Release を作る。ファイル内の version は更新しない
+- subject は Conventional Commits に従う。`feat:` は minor、それ以外は patch
+- `!`（例: `feat!:`）を付けるのは、既存の利用者が壊れる変更だけにする。環境変数・設定・DB や BigQuery のスキーマ・デプロイ手順など、既存の運用が変更なしでは動かなくなる変更が該当する。新機能や任意オプションの追加は `feat:` とする。`BREAKING CHANGE` フッターだけでは major と判定されない
