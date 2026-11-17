@@ -3,7 +3,9 @@ name: Deploy to GitHub Pages
 run-name: 'Deploy / ${{ github.ref_name }} by @${{ github.actor }}'
 
 on:
-  workflow_call:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
