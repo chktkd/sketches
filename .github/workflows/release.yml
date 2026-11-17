@@ -26,6 +26,8 @@ jobs:
     name: Release
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      released: ${{ steps.release.outputs.released }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,6 +35,21 @@ jobs:
           fetch-depth: 0
 
       - name: Release
+        id: release
         uses: chktkd/common-github-actions/actions/release@be303b96f27e4a1259af14f41c87c3b5a2eaea44 # v13.1.0
         with:
           dry-run: ${{ inputs.dry-run || false }}
+
+  # Deploys only after the tag and release exist. The called workflow runs on
+  # the push ref (refs/heads/main), so the cloud OIDC trust conditions that
+  # require main keep working; a tag-triggered run would present a tag ref.
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: release
+    if: needs.release.outputs.released == 'true' && !inputs.dry-run
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
